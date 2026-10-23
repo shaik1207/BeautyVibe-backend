@@ -57,12 +57,14 @@ const User = sequelize.define('User', {
 }, {
   timestamps: true,
   hooks: {
+    // Automatically hash password whenever a password string is provided upon creation
     beforeCreate: async (user) => {
-      if (user.password && user.authProvider === 'local') {
+      if (user.password) {
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(user.password, salt);
       }
     },
+    // Hash password if it's modified during updates
     beforeUpdate: async (user) => {
       if (user.changed('password') && user.password) {
         const salt = await bcrypt.genSalt(10);
@@ -72,6 +74,7 @@ const User = sequelize.define('User', {
   }
 });
 
+// Instance method to safely compare entered password with stored bcrypt hash
 User.prototype.matchPassword = async function (enteredPassword) {
   if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
