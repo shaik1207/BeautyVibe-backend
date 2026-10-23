@@ -44,7 +44,7 @@ exports.getServiceById = async (req, res) => {
   }
 };
 
-// 3. Create a new service (FIXES THE 404 ERROR)
+// 3. Create a new service
 exports.createService = async (req, res) => {
   try {
     const { name, category, price, duration, image, description, benefits, type } = req.body;
@@ -53,7 +53,6 @@ exports.createService = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Service name and price are required.' });
     }
 
-    // Safely parse benefits array for MySQL storage
     let safeBenefits = JSON.stringify(["Premium consultation", "Expert care"]);
     if (benefits) {
       safeBenefits = Array.isArray(benefits) ? JSON.stringify(benefits) : JSON.stringify([benefits]);
