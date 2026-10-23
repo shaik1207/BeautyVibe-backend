@@ -1,3 +1,4 @@
+require('dotenv').config(); // CRITICAL: Load environment variables first
 const { initializeApp, getApps, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 
@@ -7,9 +8,9 @@ if (getApps().length === 0) {
     credential: cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      // The replace function correctly formats the private key from your .env
+      // The replace function correctly formats the private key for Render deployment
       privateKey: process.env.FIREBASE_PRIVATE_KEY 
-        ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') 
+        ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g, '') // Also strips accidental quotes
         : undefined,
     }),
   });
