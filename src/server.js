@@ -30,7 +30,7 @@ const allowedOrigins = (
   process.env.FRONTEND_URLS ||
   (process.env.NODE_ENV !== "production"
     ? "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://beautyvibee.vercel.app"
-    : "")
+    : "https://beautyvibee.vercel.app")
 )
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
@@ -107,10 +107,14 @@ async function startServer() {
   await sequelize.authenticate();
   console.log(`[BeautyVibe DB] MySQL connected (${process.env.NODE_ENV === 'production' ? 'Aiven Cloud' : 'Localhost'})`);
 
-  // Sync tables dynamically
+  // BULLETPROOF FIX: Use plain sequelize.sync() in production to prevent ER_TOO_MANY_KEYS key bloat.
+  // Only use light alter during local development if explicitly desired, or remove alter entirely.
   if (process.env.NODE_ENV !== "production") {
-    await sequelize.sync({ alter: true });
-    console.log("[BeautyVibe DB] Development models synchronized");
+    await sequelize.sync(); 
+    console.log("[BeautyVibe DB] Development models synchronized safely");
+  } else {
+    // In production (Render + Aiven), just authenticate connection without altering table structures
+    await sequelize.sync(); 
   }
 
   await new Promise((resolve, reject) => {
