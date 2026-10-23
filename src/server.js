@@ -1,8 +1,6 @@
-
 const path = require("path");
 
-// Local development only needs .env.
-// Railway supplies production environment variables itself.
+// Load .env only in local development.
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config({
     path: path.join(__dirname, "../.env")
@@ -27,11 +25,11 @@ require("./models/Payment");
 const PORT = Number(process.env.PORT || 5000);
 const server = http.createServer(app);
 
-// Configure FRONTEND_URLS as comma-separated production URLs.
+// Configure allowed frontend URLs for CORS
 const allowedOrigins = (
   process.env.FRONTEND_URLS ||
   (process.env.NODE_ENV !== "production"
-    ? "http://localhost:5173,http://localhost:5174,http://localhost:5175"
+    ? "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://beautyvibee.vercel.app"
     : "")
 )
   .split(",")
@@ -42,11 +40,7 @@ const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Idempotency-Key"
-    ]
+    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"]
   }
 });
 
@@ -60,9 +54,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", (reason) => {
-    console.log(
-      `[BeautyVibe Socket] Disconnected: ${socket.id} (${reason})`
-    );
+    console.log(`[BeautyVibe Socket] Disconnected: ${socket.id} (${reason})`);
   });
 });
 
@@ -74,7 +66,6 @@ function shutdown(reason, exitCode = 0) {
 
   console.error(`[BeautyVibe] Shutting down: ${reason}`);
 
-  // Allow existing HTTP connections to close.
   const forceExit = setTimeout(() => {
     console.error("[BeautyVibe] Shutdown timed out");
     process.exit(1);
@@ -90,7 +81,6 @@ function shutdown(reason, exitCode = 0) {
       console.error("[BeautyVibe] Database shutdown error:", err.message);
       exitCode = 1;
     }
-
     clearTimeout(forceExit);
     process.exit(exitCode);
   });
@@ -110,18 +100,14 @@ process.on("uncaughtException", (err) => {
 });
 
 async function startServer() {
-  if (!process.env.DB_HOST ||
-      !process.env.DB_NAME ||
-      !process.env.DB_USER) {
+  if (!process.env.DB_HOST || !process.env.DB_NAME || !process.env.DB_USER) {
     throw new Error("Missing required database environment variables");
   }
 
   await sequelize.authenticate();
+  console.log(`[BeautyVibe DB] MySQL connected (${process.env.NODE_ENV === 'production' ? 'Aiven Cloud' : 'Localhost'})`);
 
-  console.log("[BeautyVibe DB] MySQL connected");
-
-  // Do not run sync({ alter: true }) in production.
-  // Apply reviewed Sequelize migrations before starting this service.
+  // Sync tables dynamically
   if (process.env.NODE_ENV !== "production") {
     await sequelize.sync({ alter: true });
     console.log("[BeautyVibe DB] Development models synchronized");
@@ -129,7 +115,6 @@ async function startServer() {
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-
     server.listen(PORT, "0.0.0.0", () => {
       server.removeListener("error", reject);
       resolve();
@@ -140,6 +125,12 @@ async function startServer() {
 }
 
 startServer().catch((err) => {
-  console.error("[BeautyVibe] Startup failed:", err);
-  process.exit(1);
+  console.error("====================================");
+  console.error("[BeautyVibe] CRITICAL STARTUP ERROR:");
+  console.error(err);
+  console.error("====================================");
+  
+  setTimeout(() => {
+    process.exit(1);
+  }, 2000);
 });
