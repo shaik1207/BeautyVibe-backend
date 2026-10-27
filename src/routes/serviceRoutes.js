@@ -1,16 +1,35 @@
-const express = require('express');
+
+const express = require("express");
 const router = express.Router();
-const { getAllServices, getServiceById, createService } = require('../controllers/serviceController');
-const { protect } = require('../middleware/authMiddleware');
 
-// Route for fetching all services
-router.get('/', getAllServices);
+const {
+  getAllServices,
+  getServiceById,
+  createService,
+  updateService,
+  deleteService,
+} = require("../controllers/serviceController");
 
-// Route for fetching a specific service
-router.get('/:id', getServiceById);
+const { protect } = require("../middleware/authMiddleware");
 
-// CRITICAL FIX: Route for saving a new service (POST /api/services)
-// Includes the 'protect' middleware so only authenticated users/admins can add services
-router.post('/', protect, createService);
+// GET /api/services
+// Fetch all services
+router.get("/", getAllServices);
+
+// GET /api/services/:id
+// Fetch one service
+router.get("/:id", getServiceById);
+
+// POST /api/services
+// Create a service (authenticated)
+router.post("/", protect, createService);
+
+// PUT /api/services/:id
+// Update an existing service (authenticated)
+router.put("/:id", protect, updateService);
+
+// DELETE /api/services/:id
+// Delete an existing service (authenticated)
+router.delete("/:id", protect, deleteService);
 
 module.exports = router;
