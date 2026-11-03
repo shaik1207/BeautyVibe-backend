@@ -13,13 +13,21 @@ const sequelize = new Sequelize(
     port: process.env.DB_PORT || 3306,
     dialect: 'mysql',
     logging: false,
+    // Connection pooling to maintain stable connection between Render & Aiven
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000,
+    },
     dialectOptions: isProduction 
       ? {
           // AIVEN / PRODUCTION SECURE SETTINGS
           ssl: {
             require: true,
-            rejectUnauthorized: false 
-          }
+            rejectUnauthorized: false,
+          },
+          connectTimeout: 60000, // Prevents sudden timeout drops on cold starts
         } 
       : {}, // LOCALHOST SETTINGS (No SSL required)
   }

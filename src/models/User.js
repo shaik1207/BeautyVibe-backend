@@ -1,6 +1,6 @@
 const { DataTypes } = require('sequelize');
 const bcrypt = require('bcryptjs');
-const sequelize = require('../config/database');
+const sequelize = require('../config/database'); // <-- Required here at the top
 
 const User = sequelize.define('User', {
   id: {
@@ -62,7 +62,6 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING,
     defaultValue: 'Active',
   },
-  // JSON columns for storing doorstep addresses and payment methods seamlessly
   addresses: {
     type: DataTypes.JSON,
     defaultValue: [],
@@ -72,6 +71,7 @@ const User = sequelize.define('User', {
     defaultValue: [],
   }
 }, {
+  tableName: 'users',
   timestamps: true,
   hooks: {
     beforeCreate: async (user) => {
@@ -89,7 +89,6 @@ const User = sequelize.define('User', {
   }
 });
 
-// Instance method to safely compare entered password with stored bcrypt hash
 User.prototype.matchPassword = async function (enteredPassword) {
   if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
