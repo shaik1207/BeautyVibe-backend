@@ -12,7 +12,7 @@ const { Server } = require("socket.io");
 const app = require("./app");
 const sequelize = require("./config/database");
 
-// Register models and their associations (Address added here)
+// Register models and their associations
 require("./models/User");
 require("./models/Service");
 require("./models/Appointment");
@@ -20,17 +20,17 @@ require("./models/Package");
 require("./models/Staff");
 require("./models/Offer");
 require("./models/Payment");
-require("./models/Address"); // <-- CRITICAL FIX: Registered Address model
+require("./models/Address");
 
 const PORT = Number(process.env.PORT || 5000);
 const server = http.createServer(app);
 
-// Configure allowed frontend URLs for CORS
+// Configure allowed frontend URLs for CORS (Fixed production comma-separated origins)
 const allowedOrigins = (
   process.env.FRONTEND_URLS ||
   (process.env.NODE_ENV !== "production"
     ? "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://beautyvibee.vercel.app"
-    : "https://beautyvibe-admin.vercel.app","https://beautyvibes.in/")
+    : "https://beautyvibe-admin.vercel.app,https://beautyvibes.in,https://beautyvibee.vercel.app")
 )
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
@@ -123,7 +123,7 @@ async function startServer() {
 
 startServer().catch((err) => {
   console.error("====================================");
-  console.error("[BeautyVibe] CRITICAL STARTUPERRO R:");
+  console.error("[BeautyVibe] CRITICAL STARTUP ERROR:");
   console.error(err);
   console.error("====================================");
   
