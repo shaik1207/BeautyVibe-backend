@@ -8,6 +8,13 @@ const generateToken = (id) => {
   });
 };
 
+// Helper to remove password hashes from user objects before sending responses
+const sanitizeUser = (user) => {
+  const userJson = user.toJSON ? user.toJSON() : user;
+  delete userJson.password;
+  return userJson;
+};
+
 // 1. Standard Register Handler (For Admin / Local Signup)
 const registerUser = async (req, res) => {
   try {
@@ -17,15 +24,17 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email and password are required.' });
     }
 
-    const existingUser = await User.findOne({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existingUser = await User.findOne({ where: { email: normalizedEmail } });
     if (existingUser) {
       return res.status(400).json({ success: false, message: 'User already exists with this email.' });
     }
 
     // The User model hook will automatically hash this password securely
     const user = await User.create({
-      name: name || email.split('@')[0],
-      email,
+      name: name || normalizedEmail.split('@')[0],
+      email: normalizedEmail,
       password,
       phone: phone || '+91 98765 43210',
       role: role || 'user',
@@ -36,7 +45,7 @@ const registerUser = async (req, res) => {
     return res.status(201).json({
       success: true,
       token,
-      data: user,
+      data: sanitizeUser(user),
     });
   } catch (error) {
     console.error("Registration Error:", error);
@@ -53,12 +62,13 @@ const googleAuth = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email is required from Google.' });
     }
 
-    let user = await User.findOne({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+    let user = await User.findOne({ where: { email: normalizedEmail } });
 
     if (!user) {
       user = await User.create({
-        name: name || email.split('@')[0],
-        email,
+        name: name || normalizedEmail.split('@')[0],
+        email: normalizedEmail,
         password: null, // Google users do not require passwords
         phone: phone || '+91 98765 43210',
         role: 'user',
@@ -71,7 +81,7 @@ const googleAuth = async (req, res) => {
     return res.status(200).json({
       success: true,
       token,
-      data: user,
+      data: sanitizeUser(user),
     });
   } catch (error) {
     console.error("Google Auth Error:", error);
@@ -88,7 +98,8 @@ const loginUser = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide email and password.' });
     }
 
-    const user = await User.findOne({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ where: { email: normalizedEmail } });
 
     // Check if user exists, has a password, and password matches
     if (!user || !user.password || !(await user.matchPassword(password))) {
@@ -99,7 +110,7 @@ const loginUser = async (req, res) => {
     return res.status(200).json({
       success: true,
       token,
-      data: user,
+      data: sanitizeUser(user),
     });
   } catch (error) {
     console.error("Login Error:", error);
@@ -113,7 +124,7 @@ const getMe = async (req, res) => {
     if (!req.user) {
       return res.status(401).json({ success: false, message: 'Not authorized.' });
     }
-    return res.status(200).json({ success: true, data: req.user });
+    return res.status(200).json({ success: true, data: sanitizeUser(req.user) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
