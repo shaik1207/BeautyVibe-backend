@@ -20,30 +20,35 @@ const reportRoutes = require("./routes/reportRoutes");
 const app = express();
 
 // --------------------------------------------------
-// CORS (Updated with all production & development frontends)
+// CORS (Smart matcher supporting all Vercel previews & production domains)
 // --------------------------------------------------
-const allowedOrigins = (
-  process.env.FRONTEND_URLS ||
-  [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:5175",
-    "https://beautyvibee.vercel.app",
-    "https://beautyvibe-admin.vercel.app",
-    "https://beautyvibes.in",
-  ].join(",")
-)
-  .split(",")
-  .map((origin) => origin.trim().replace(/\/+$/, ""))
-  .filter(Boolean);
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "https://beautyvibee.vercel.app",
+  "https://beautyvibe-admin.vercel.app",
+  "https://beautyvibes.in",
+];
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow server-to-server requests, mobile apps, or Postman (no origin header)
-      if (!origin || allowedOrigins.includes(origin)) {
+      // Allow non-browser requests (Postman, mobile apps, server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Clean trailing slash from incoming origin if any
+      const cleanOrigin = origin.replace(/\/+$/, "");
+
+      // Check if it's explicitly allowed OR is any Vercel deployment (*.vercel.app)
+      const isVercelSubdomain = /\.vercel\.app$/i.test(cleanOrigin);
+      const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
+
+      if (isExplicitlyAllowed || isVercelSubdomain) {
         return callback(null, true);
       }
+
+      console.warn(`[CORS Blocked] Unrecognized origin attempted access: "${origin}"`);
       return callback(new Error("Origin not allowed by CORS"));
     },
     credentials: true,
