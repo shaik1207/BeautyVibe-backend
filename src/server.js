@@ -30,7 +30,7 @@ const allowedOrigins = (
   process.env.FRONTEND_URLS ||
   (process.env.NODE_ENV !== "production"
     ? "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://beautyvibee.vercel.app"
-    : "https://beautyvibee.vercel.app")
+    : "https://beautyvibe-admin.vercel.app","https://beautyvibes.in/")
 )
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
