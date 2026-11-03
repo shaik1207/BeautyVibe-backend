@@ -20,7 +20,7 @@ const reportRoutes = require("./routes/reportRoutes");
 const app = express();
 
 // --------------------------------------------------
-// CORS
+// CORS (Updated with all production & development frontends)
 // --------------------------------------------------
 const allowedOrigins = (
   process.env.FRONTEND_URLS ||
@@ -29,6 +29,8 @@ const allowedOrigins = (
     "http://localhost:5174",
     "http://localhost:5175",
     "https://beautyvibee.vercel.app",
+    "https://beautyvibe-admin.vercel.app",
+    "https://beautyvibes.in",
   ].join(",")
 )
   .split(",")
@@ -38,6 +40,7 @@ const allowedOrigins = (
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow server-to-server requests, mobile apps, or Postman (no origin header)
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
