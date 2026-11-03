@@ -1,6 +1,5 @@
 const path = require("path");
 
-// Load .env only in local development.
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config({
     path: path.join(__dirname, "../.env")
@@ -13,7 +12,7 @@ const { Server } = require("socket.io");
 const app = require("./app");
 const sequelize = require("./config/database");
 
-// Register models and their associations.
+// Register models and their associations (Address added here)
 require("./models/User");
 require("./models/Service");
 require("./models/Appointment");
@@ -21,6 +20,7 @@ require("./models/Package");
 require("./models/Staff");
 require("./models/Offer");
 require("./models/Payment");
+require("./models/Address"); // <-- CRITICAL FIX: Registered Address model
 
 const PORT = Number(process.env.PORT || 5000);
 const server = http.createServer(app);
@@ -107,15 +107,8 @@ async function startServer() {
   await sequelize.authenticate();
   console.log(`[BeautyVibe DB] MySQL connected (${process.env.NODE_ENV === 'production' ? 'Aiven Cloud' : 'Localhost'})`);
 
-  // BULLETPROOF FIX: Use plain sequelize.sync() in production to prevent ER_TOO_MANY_KEYS key bloat.
-  // Only use light alter during local development if explicitly desired, or remove alter entirely.
-  if (process.env.NODE_ENV !== "production") {
-    await sequelize.sync(); 
-    console.log("[BeautyVibe DB] Development models synchronized safely");
-  } else {
-    // In production (Render + Aiven), just authenticate connection without altering table structures
-    await sequelize.sync(); 
-  }
+  await sequelize.sync(); 
+  console.log("[BeautyVibe DB] Models synchronized successfully");
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -130,7 +123,7 @@ async function startServer() {
 
 startServer().catch((err) => {
   console.error("====================================");
-  console.error("[BeautyVibe] CRITICAL STARTUP ERROR:");
+  console.error("[BeautyVibe] CRITICAL STARTUPERRO R:");
   console.error(err);
   console.error("====================================");
   

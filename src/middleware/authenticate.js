@@ -1,39 +1,85 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// --------------------------------------------------
+// AUTHENTICATION MIDDLEWARE
+// --------------------------------------------------
 const protect = async (req, res, next) => {
-  let token;
+  try {
+    let token = null;
 
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      
-      // Attach user from database to request
-      req.user = await User.findByPk(decoded.id, { attributes: { exclude: ['password'] } });
-      
-      if (!req.user) {
-        return res.status(401).json({ success: false, message: 'User not found for this token.' });
-      }
-
-      return next();
-    } catch (error) {
-      console.error("Token verification failed:", error.message);
-      return res.status(401).json({ success: false, message: 'Not authorized, token failed.' });
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.slice(7).trim();
     }
-  }
 
-  if (!token) {
-    return res.status(401).json({ success: false, message: 'Not authorized, no token provided.' });
-  }
-};
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Not authorized, token missing.' 
+      });
+    }
 
-const admin = (req, res, next) => {
-  if (req.user && req.user.role === 'admin') {
+    const secret = process.env.JWT_SECRET;
+    if (!secret && process.env.NODE_ENV === 'production') {
+      console.error("[AUTH ERROR] JWT_SECRET is missing in environment variables!");
+    }
+
+    // Verify token
+    const decoded = jwt.verify(token, secret || 'your_jwt_secret_key');
+
+    if (!decoded || !decoded.id) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Not authorized, invalid token payload.' 
+      });
+    }
+
+    // Fetch user from database excluding password
+    const user = await User.findByPk(decoded.id, {
+      attributes: { exclude: ['password'] }
+    });
+
+    if (!user) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Not authorized, user no longer exists.' 
+      });
+    }
+
+    req.user = user;
     next();
-  } else {
-    res.status(403).json({ success: false, message: 'Access denied. Admin role required.' });
+  } catch (error) {
+    console.error("Auth Middleware Error:", error.message);
+    
+    const message = error.name === 'TokenExpiredError' 
+      ? 'Not authorized, token expired.' 
+      : 'Not authorized, token failed.';
+
+    return res.status(401).json({ 
+      success: false, 
+      message 
+    });
   }
 };
 
-module.exports = { protect, admin };
+// --------------------------------------------------
+// ADMIN AUTHORIZATION MIDDLEWARE
+// --------------------------------------------------
+const adminOnly = (req, res, next) => {
+  const role = String(req.user?.role || "").toLowerCase().trim();
+
+  if (role === 'admin' || role === 'superadmin') {
+    return next();
+  }
+
+  return res.status(403).json({ 
+    success: false, 
+    message: 'Access denied. Administrator role required.' 
+  });
+};
+
+module.exports = { 
+  protect, 
+  adminOnly 
+};

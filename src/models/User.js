@@ -8,6 +8,14 @@ const User = sequelize.define('User', {
     autoIncrement: true,
     primaryKey: true,
   },
+  firstName: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  lastName: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
   name: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -53,18 +61,25 @@ const User = sequelize.define('User', {
   status: {
     type: DataTypes.STRING,
     defaultValue: 'Active',
+  },
+  // JSON columns for storing doorstep addresses and payment methods seamlessly
+  addresses: {
+    type: DataTypes.JSON,
+    defaultValue: [],
+  },
+  payments: {
+    type: DataTypes.JSON,
+    defaultValue: [],
   }
 }, {
   timestamps: true,
   hooks: {
-    // Automatically hash password whenever a password string is provided upon creation
     beforeCreate: async (user) => {
       if (user.password) {
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(user.password, salt);
       }
     },
-    // Hash password if it's modified during updates
     beforeUpdate: async (user) => {
       if (user.changed('password') && user.password) {
         const salt = await bcrypt.genSalt(10);

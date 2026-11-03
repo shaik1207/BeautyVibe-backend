@@ -1,31 +1,20 @@
-
 const Service = require("../models/Service");
-const { Op } = require("sequelize");
-
-// --------------------------------------------------
-// DEFAULT VALUES
-// --------------------------------------------------
+const { ValidationError, UniqueConstraintError } = require("sequelize");
 
 const DEFAULT_IMAGE =
-  "https://images.unsplash.com/photo-1522337660859-02fbefca4702?w=800&q=80";
+  "https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=800&q=80";
 
 const DEFAULT_BENEFITS = [
-  "Premium consultation",
-  "Expert care",
+  "Personalized consultation",
+  "Professional tools & hygiene",
+  "Finishing expert advice",
 ];
 
-// --------------------------------------------------
-// MODEL HELPERS
-// --------------------------------------------------
+const MAX_IMAGE_LENGTH = 15 * 1024 * 1024; // 15MB limit
 
-const hasField = (field) =>
-  Object.prototype.hasOwnProperty.call(
-    Service.rawAttributes || {},
-    field
-  );
-
-const getField = (...fields) =>
-  fields.find((field) => hasField(field));
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
 
 const toBoolean = (value, fallback = false) => {
   if (value === undefined || value === null || value === "") {
@@ -35,16 +24,14 @@ const toBoolean = (value, fallback = false) => {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
 
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
+  const normalized = String(value).trim().toLowerCase();
 
-    if (["true", "1", "yes", "on"].includes(normalized)) {
-      return true;
-    }
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
 
-    if (["false", "0", "no", "off"].includes(normalized)) {
-      return false;
-    }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
   }
 
   return fallback;
@@ -52,37 +39,65 @@ const toBoolean = (value, fallback = false) => {
 
 const parseBenefits = (value) => {
   if (Array.isArray(value)) {
-    return value;
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean);
   }
 
-  if (typeof value !== "string" || !value.trim()) {
-    return [...DEFAULT_BENEFITS];
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+
+      if (Array.isArray(parsed)) {
+        return parsed.map(String).map((item) => item.trim()).filter(Boolean);
+      }
+    } catch {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
   }
 
-  try {
-    const parsed = JSON.parse(value);
-
-    return Array.isArray(parsed) ? parsed : [String(parsed)];
-  } catch {
-    return [value.trim()];
-  }
+  return [...DEFAULT_BENEFITS];
 };
 
-const serializeBenefits = (value) => {
-  if (value === undefined) return undefined;
-
-  const benefits = parseBenefits(value);
-
-  const attribute = Service.rawAttributes?.benefits;
-  const dataType = attribute?.type?.key;
-
-  // Keep arrays as arrays when the database column is JSON.
-  if (dataType === "JSON" || dataType === "JSONB") {
-    return benefits;
+const normalizeImage = (image, existingImage = null) => {
+  if (image === undefined || image === null || image === "") {
+    return existingImage || DEFAULT_IMAGE;
   }
 
-  // For TEXT or STRING columns, store JSON as text.
-  return JSON.stringify(benefits);
+  if (typeof image !== "string") {
+    try {
+      image = String(image);
+    } catch {
+      return existingImage || DEFAULT_IMAGE;
+    }
+  }
+
+  const cleanImage = image.trim();
+
+  if (!cleanImage) {
+    return existingImage || DEFAULT_IMAGE;
+  }
+
+  if (cleanImage.length > MAX_IMAGE_LENGTH) {
+    throw new Error(
+      "Image is too large. Please choose an image smaller than 15MB."
+    );
+  }
+
+  return cleanImage;
+};
+
+const getServiceId = (value) => {
+  const id = Number(value);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return null;
+  }
+
+  return id;
 };
 
 const formatService = (service) => {
@@ -91,129 +106,92 @@ const formatService = (service) => {
       ? service.toJSON()
       : { ...service };
 
-  const trendingField = getField(
-    "isTrending",
-    "is_trending"
-  );
-
-  const discountField = getField(
-    "discountApplicable",
-    "discount_applicable"
-  );
+  let imagePath = item.image || DEFAULT_IMAGE;
+  if (imagePath && imagePath.startsWith("uploads/")) {
+    imagePath = `/${imagePath}`;
+  }
 
   return {
     ...item,
+    id: String(item.id),
+    price: Number(item.price),
+    duration: item.duration || "60 mins",
+    image: imagePath,
+    description: item.description || "",
     benefits: parseBenefits(item.benefits),
-    isTrending: toBoolean(
-      trendingField ? item[trendingField] : undefined,
-      false
-    ),
-    discountApplicable: toBoolean(
-      discountField ? item[discountField] : undefined,
-      true
-    ),
+    isTrending: toBoolean(item.isTrending, false),
+    discountApplicable: toBoolean(item.discountApplicable, true),
   };
 };
 
 const sendServerError = (res, operation, error) => {
-  console.error(`\n❌ ${operation} ERROR`);
-  console.error("Message:", error.message);
-  console.error("SQL:", error.sql || "Not available");
-  console.error(
-    "Database error:",
-    error.parent?.message ||
-      error.original?.message ||
-      "Not available"
-  );
+  console.error(`[SERVICES] ${operation} failed:`, {
+    message: error.message,
+    name: error.name,
+    sqlMessage: error.original?.sqlMessage,
+  });
+
+  if (error instanceof ValidationError) {
+    return res.status(400).json({
+      success: false,
+      message: error.errors?.[0]?.message || "Please check the service details.",
+      details: error.errors?.map((item) => item.message),
+    });
+  }
+
+  if (error instanceof UniqueConstraintError) {
+    return res.status(409).json({
+      success: false,
+      message: "A service with these details already exists.",
+    });
+  }
 
   return res.status(500).json({
     success: false,
     message: `${operation} failed.`,
-    error: error.message,
-    databaseError:
-      error.parent?.message ||
-      error.original?.message ||
-      null,
+    error:
+      process.env.NODE_ENV === "development"
+        ? error.message
+        : undefined,
   });
 };
 
-const getNumericId = (id) => {
-  if (!/^\d+$/.test(String(id))) return null;
-
-  const numericId = Number(id);
-
-  if (!Number.isSafeInteger(numericId) || numericId < 1) {
-    return null;
-  }
-
-  return numericId;
-};
-
 // --------------------------------------------------
-// 1. GET ALL SERVICES
-// GET /api/services
+// GET ALL SERVICES
 // --------------------------------------------------
 
 exports.getAllServices = async (req, res) => {
   try {
-    const options = {};
-
-    if (hasField("createdAt")) {
-      options.order = [["createdAt", "DESC"]];
-    }
-
-    const services = await Service.findAll(options);
+    const services = await Service.findAll({
+      order: [["createdAt", "DESC"]],
+    });
 
     return res.status(200).json({
       success: true,
+      count: services.length,
       data: services.map(formatService),
     });
   } catch (error) {
-    return sendServerError(res, "Fetch services", error);
+    return sendServerError(res, "Fetching services", error);
   }
 };
 
 // --------------------------------------------------
-// 2. GET SERVICE BY ID OR SEARCH NAME/CATEGORY
-// GET /api/services/:id
+// GET SERVICE BY ID
 // --------------------------------------------------
 
 exports.getServiceById = async (req, res) => {
   try {
-    const { id } = req.params;
-    let service = null;
+    const id = getServiceId(req.params.id);
 
-    const numericId = getNumericId(id);
-
-    if (numericId !== null) {
-      service = await Service.findByPk(numericId);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid service ID.",
+      });
     }
 
-    // Preserve the existing name/category search behavior
-    // when no service is found using the numeric ID.
-    if (!service) {
-      const searchConditions = [];
-
-      if (hasField("name")) {
-        searchConditions.push({
-          name: { [Op.like]: `%${id}%` },
-        });
-      }
-
-      if (hasField("category")) {
-        searchConditions.push({
-          category: { [Op.like]: `%${id}%` },
-        });
-      }
-
-      if (searchConditions.length > 0) {
-        service = await Service.findOne({
-          where: {
-            [Op.or]: searchConditions,
-          },
-        });
-      }
-    }
+    const service = await Service.findByPk(id);
 
     if (!service) {
       return res.status(404).json({
@@ -227,164 +205,110 @@ exports.getServiceById = async (req, res) => {
       data: formatService(service),
     });
   } catch (error) {
-    return sendServerError(res, "Get service", error);
+    return sendServerError(res, "Fetching service", error);
   }
 };
 
 // --------------------------------------------------
-// 3. CREATE SERVICE
-// POST /api/services
+// CREATE SERVICE
 // --------------------------------------------------
 
 exports.createService = async (req, res) => {
   try {
     const body = req.body || {};
 
-    const {
-      name,
-      title,
-      category,
-      price,
-      duration,
-      image,
-      description,
-      desc,
-      benefits,
-      type,
-      isTrending,
-      is_trending,
-      discountApplicable,
-      discount_applicable,
-      rating,
-      reviews,
-    } = body;
+    const name = String(body.name ?? body.title ?? "").trim();
+    const category = String(body.category ?? "").trim();
+    const price = Number(body.price);
+    const duration = String(body.duration || "60 mins").trim();
+    const description = String(body.description ?? body.desc ?? "").trim();
 
-    const serviceName = String(name ?? title ?? "").trim();
-
-    if (!serviceName) {
+    if (!name || name.length < 2 || name.length > 150) {
       return res.status(400).json({
         success: false,
-        message: "Service name is required.",
+        message: "Service name must contain 2 to 150 characters.",
+      });
+    }
+
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a service category.",
       });
     }
 
     if (
-      price === undefined ||
-      price === null ||
-      price === "" ||
-      !Number.isFinite(Number(price)) ||
-      Number(price) < 0
+      body.price === undefined ||
+      body.price === null ||
+      body.price === "" ||
+      !Number.isFinite(price) ||
+      price < 0 ||
+      price > 99999999.99
     ) {
       return res.status(400).json({
         success: false,
-        message: "A valid, non-negative service price is required.",
+        message: "Enter a valid service price.",
       });
     }
 
-    const serviceData = {};
-
-    // Required/core fields
-    if (hasField("name")) {
-      serviceData.name = serviceName;
-    } else if (hasField("title")) {
-      serviceData.title = serviceName;
-    } else {
-      return res.status(500).json({
+    if (!duration || duration.length > 50) {
+      return res.status(400).json({
         success: false,
-        message:
-          'Service model must define a "name" or "title" field.',
+        message: "Enter a valid service duration.",
       });
     }
 
-    if (hasField("category")) {
-      serviceData.category = category || "General";
+    let imagePath = DEFAULT_IMAGE;
+    if (req.file) {
+      imagePath = `/uploads/${req.file.filename}`;
+    } else if (body.imageUrl !== undefined && String(body.imageUrl).trim()) {
+      imagePath = normalizeImage(body.imageUrl);
+    } else if (body.image !== undefined && String(body.image).trim() && !String(body.image).startsWith("blob:")) {
+      imagePath = normalizeImage(body.image);
     }
 
-    if (hasField("price")) {
-      serviceData.price = Number(price);
-    }
-
-    if (hasField("duration")) {
-      serviceData.duration = duration || "45 mins";
-    }
-
-    if (hasField("image")) {
-      serviceData.image = image || DEFAULT_IMAGE;
-    }
-
-    const serviceDescription =
-      description ?? desc ?? "Premium BeautyVibe service.";
-
-    if (hasField("description")) {
-      serviceData.description = serviceDescription;
-    } else if (hasField("desc")) {
-      serviceData.desc = serviceDescription;
-    }
-
-    if (hasField("benefits")) {
-      serviceData.benefits = serializeBenefits(
-        benefits ?? DEFAULT_BENEFITS
-      );
-    }
-
-    if (hasField("type")) {
-      serviceData.type = type || "SALON";
-    }
-
-    if (hasField("rating")) {
-      serviceData.rating = rating ?? "5.0";
-    }
-
-    if (hasField("reviews")) {
-      serviceData.reviews = reviews ?? "0";
-    }
-
-    const trendingField = getField(
-      "isTrending",
-      "is_trending"
-    );
-
-    if (trendingField) {
-      serviceData[trendingField] = toBoolean(
-        isTrending ?? is_trending,
-        false
-      );
-    }
-
-    const discountField = getField(
-      "discountApplicable",
-      "discount_applicable"
-    );
-
-    if (discountField) {
-      serviceData[discountField] = toBoolean(
-        discountApplicable ?? discount_applicable,
+    const service = await Service.create({
+      name,
+      category,
+      price,
+      duration,
+      description,
+      image: imagePath,
+      benefits: parseBenefits(body.benefits),
+      isTrending: toBoolean(body.isTrending ?? body.is_trending, false),
+      discountApplicable: toBoolean(
+        body.discountApplicable ?? body.discount_applicable,
         true
-      );
-    }
+      ),
+    });
 
-    const newService = await Service.create(serviceData);
+    const savedService = formatService(service);
+
+    const io = req.app.get("io");
+
+    if (io) {
+      io.emit("serviceAdded", savedService);
+    }
 
     return res.status(201).json({
       success: true,
       message: "Service created successfully.",
-      data: formatService(newService),
+      data: savedService,
     });
   } catch (error) {
-    return sendServerError(res, "Create service", error);
+    return sendServerError(res, "Creating service", error);
   }
 };
 
 // --------------------------------------------------
-// 4. UPDATE SERVICE
-// PUT /api/services/:id
+// UPDATE SERVICE
 // --------------------------------------------------
 
 exports.updateService = async (req, res) => {
   try {
-    const id = getNumericId(req.params.id);
+    const id = getServiceId(req.params.id);
 
-    if (id === null) {
+    if (!id) {
       return res.status(400).json({
         success: false,
         message: "Invalid service ID.",
@@ -396,165 +320,151 @@ exports.updateService = async (req, res) => {
     if (!service) {
       return res.status(404).json({
         success: false,
-        message: `Service with ID ${id} was not found.`,
+        message: "The service you are trying to update does not exist.",
       });
     }
 
     const body = req.body || {};
     const updates = {};
 
-    // Name / title
-    const incomingName =
-      body.name !== undefined ? body.name : body.title;
+    if (body.name !== undefined || body.title !== undefined) {
+      const name = String(body.name ?? body.title ?? "").trim();
 
-    if (incomingName !== undefined) {
-      const newName = String(incomingName).trim();
-
-      if (!newName) {
+      if (name.length < 2 || name.length > 150) {
         return res.status(400).json({
           success: false,
-          message: "Service name cannot be empty.",
+          message: "Service name must contain 2 to 150 characters.",
         });
       }
 
-      const nameField = getField("name", "title");
+      updates.name = name;
+    }
 
-      if (nameField) {
-        updates[nameField] = newName;
+    if (body.category !== undefined) {
+      const category = String(body.category).trim();
+
+      if (!category) {
+        return res.status(400).json({
+          success: false,
+          message: "Please select a valid service category.",
+        });
       }
+
+      updates.category = category;
     }
 
-    // Category
-    if (body.category !== undefined && hasField("category")) {
-      updates.category = body.category;
-    }
-
-    // Price
     if (body.price !== undefined) {
+      const price = Number(body.price);
+
       if (
         body.price === null ||
         body.price === "" ||
-        !Number.isFinite(Number(body.price)) ||
-        Number(body.price) < 0
+        !Number.isFinite(price) ||
+        price < 0 ||
+        price > 99999999.99
       ) {
         return res.status(400).json({
           success: false,
-          message: "Enter a valid, non-negative price.",
+          message: "Enter a valid service price.",
         });
       }
 
-      if (hasField("price")) {
-        updates.price = Number(body.price);
+      updates.price = price;
+    }
+
+    if (body.duration !== undefined) {
+      const duration = String(body.duration).trim();
+
+      if (!duration || duration.length > 50) {
+        return res.status(400).json({
+          success: false,
+          message: "Enter a valid service duration.",
+        });
       }
+
+      updates.duration = duration;
     }
 
-    // Duration
-    if (body.duration !== undefined && hasField("duration")) {
-      updates.duration = body.duration;
+    if (body.description !== undefined || body.desc !== undefined) {
+      updates.description = String(
+        body.description ?? body.desc ?? ""
+      ).trim();
     }
 
-    // Image
-    if (body.image !== undefined && hasField("image")) {
-      updates.image = body.image || DEFAULT_IMAGE;
+    if (req.file) {
+      updates.image = `/uploads/${req.file.filename}`;
+    } else if (body.imageUrl !== undefined && String(body.imageUrl).trim()) {
+      let url = String(body.imageUrl).trim();
+      if (url.startsWith("http://localhost:5000")) {
+        url = url.replace("http://localhost:5000", "");
+      }
+      updates.image = normalizeImage(url, service.image);
+    } else if (
+      body.image !== undefined &&
+      String(body.image).trim() &&
+      !String(body.image).startsWith("blob:")
+    ) {
+      updates.image = normalizeImage(body.image, service.image);
     }
 
-    // Description
-    const incomingDescription =
-      body.description !== undefined
-        ? body.description
-        : body.desc;
+    if (body.benefits !== undefined) {
+      updates.benefits = parseBenefits(body.benefits);
+    }
 
-    if (incomingDescription !== undefined) {
-      const descriptionField = getField(
-        "description",
-        "desc"
+    if (body.isTrending !== undefined || body.is_trending !== undefined) {
+      updates.isTrending = toBoolean(
+        body.isTrending ?? body.is_trending,
+        false
       );
-
-      if (descriptionField) {
-        updates[descriptionField] = incomingDescription;
-      }
     }
 
-    // Benefits
-    if (body.benefits !== undefined && hasField("benefits")) {
-      updates.benefits = serializeBenefits(body.benefits);
-    }
-
-    // Type
-    if (body.type !== undefined && hasField("type")) {
-      updates.type = body.type;
-    }
-
-    // Trending status: accept both field names
-    const incomingTrending =
-      body.isTrending !== undefined
-        ? body.isTrending
-        : body.is_trending;
-
-    const trendingField = getField(
-      "isTrending",
-      "is_trending"
-    );
-
-    if (incomingTrending !== undefined && trendingField) {
-      updates[trendingField] = toBoolean(incomingTrending);
-    }
-
-    // Discount status: accept both field names
-    const incomingDiscount =
-      body.discountApplicable !== undefined
-        ? body.discountApplicable
-        : body.discount_applicable;
-
-    const discountField = getField(
-      "discountApplicable",
-      "discount_applicable"
-    );
-
-    if (incomingDiscount !== undefined && discountField) {
-      updates[discountField] = toBoolean(incomingDiscount);
-    }
-
-    // Rating and reviews, if the model supports them
-    if (body.rating !== undefined && hasField("rating")) {
-      updates.rating = body.rating;
-    }
-
-    if (body.reviews !== undefined && hasField("reviews")) {
-      updates.reviews = body.reviews;
+    if (
+      body.discountApplicable !== undefined ||
+      body.discount_applicable !== undefined
+    ) {
+      updates.discountApplicable = toBoolean(
+        body.discountApplicable ?? body.discount_applicable,
+        true
+      );
     }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "No supported fields were provided for updating this service.",
+        message: "No valid changes were provided.",
       });
     }
 
     await service.update(updates);
     await service.reload();
 
+    const updatedService = formatService(service);
+
+    const io = req.app.get("io");
+
+    if (io) {
+      io.emit("serviceUpdated", updatedService);
+    }
+
     return res.status(200).json({
       success: true,
       message: "Service updated successfully.",
-      data: formatService(service),
+      data: updatedService,
     });
   } catch (error) {
-    return sendServerError(res, "Update service", error);
+    return sendServerError(res, "Updating service", error);
   }
 };
 
 // --------------------------------------------------
-// 5. DELETE SERVICE
-// DELETE /api/services/:id
+// DELETE SERVICE
 // --------------------------------------------------
 
 exports.deleteService = async (req, res) => {
   try {
-    const id = getNumericId(req.params.id);
+    const id = getServiceId(req.params.id);
 
-    if (id === null) {
+    if (!id) {
       return res.status(400).json({
         success: false,
         message: "Invalid service ID.",
@@ -566,18 +476,26 @@ exports.deleteService = async (req, res) => {
     if (!service) {
       return res.status(404).json({
         success: false,
-        message: `Service with ID ${id} was not found.`,
+        message: "Service not found.",
       });
     }
 
     await service.destroy();
 
+    const io = req.app.get("io");
+
+    if (io) {
+      io.emit("serviceDeleted", String(id));
+    }
+
     return res.status(200).json({
       success: true,
       message: "Service deleted successfully.",
-      data: { id: String(id) },
+      data: {
+        id: String(id),
+      },
     });
   } catch (error) {
-    return sendServerError(res, "Delete service", error);
+    return sendServerError(res, "Deleting service", error);
   }
 };
