@@ -25,25 +25,38 @@ require("./models/Address");
 const PORT = Number(process.env.PORT || 5000);
 const server = http.createServer(app);
 
-// Configure allowed frontend URLs for CORS (Added missing www.beautyvibes.in)
-const allowedOrigins = (
-  process.env.FRONTEND_URLS ||
-  (process.env.NODE_ENV !== "production"
-    ? "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://beautyvibee.vercel.app"
-    : "https://beautyvibe-admin.vercel.app,https://beautyvibes.in,https://www.beautyvibes.in,https://beautyvibee.vercel.app")
-)
-  .split(",")
-  .map((origin) => origin.trim().replace(/\/$/, ""))
-  .filter(Boolean);
+// Robust allowed origins supporting production and previews
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "https://beautyvibee.vercel.app",
+  "https://beautyvibe-admin.vercel.app",
+  "https://beautyvibes.in",
+  "https://www.beautyvibes.in",
+];
 
-// Share allowedOrigins with Express app.js if needed
+// Share allowedOrigins with Express app if needed
 app.set("allowedOrigins", allowedOrigins);
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const cleanOrigin = origin.replace(/\/+$/, "");
+      const isVercelSubdomain = /\.vercel\.app$/i.test(cleanOrigin);
+      const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
+
+      if (isExplicitlyAllowed || isVercelSubdomain) {
+        return callback(null, true);
+      }
+
+      console.warn(`[Socket.io CORS Blocked] Unrecognized origin: "${origin}"`);
+      return callback(new Error("Origin not allowed by CORS"));
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"]
+    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
+    credentials: true,
   }
 });
 

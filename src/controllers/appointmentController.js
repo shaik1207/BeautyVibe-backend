@@ -15,7 +15,6 @@ exports.getUserAppointments = async (req, res) => {
 
     const queryOptions = isAdmin ? {} : { where: { userId } };
 
-    // Safely include associations now that they are declared in Appointment.js
     queryOptions.include = [
       {
         model: Service,
@@ -88,18 +87,27 @@ exports.createAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide service name, date, and time.' });
     }
 
+    // Robust validation: Check if serviceId exists in MySQL Services table to prevent FK crashes
+    let validServiceId = null;
+    if (serviceId) {
+      const serviceExists = await Service.findByPk(serviceId);
+      if (serviceExists) {
+        validServiceId = serviceId;
+      }
+    }
+
     const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     const appointment = await Appointment.create({
       userId,
-      serviceId: serviceId || 1,
+      serviceId: validServiceId, // Safely handled as null or valid foreign key ID
       serviceName,
       category: category || 'General',
       amount: amount || 999,
       type: type || 'SALON',
       date,
       time,
-      status: 'Pending', // Strictly defaults to Pending
+      status: 'Pending',
       passCode,
       requestId: requestId || idempotencyKey || `REQ-${Date.now()}`,
     });
