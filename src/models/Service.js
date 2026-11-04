@@ -1,3 +1,4 @@
+
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 
@@ -59,7 +60,6 @@ const Service = sequelize.define(
       allowNull: true,
     },
 
-    // LONGTEXT is required for Base64 images and large URLs.
     image: {
       type: DataTypes.TEXT("long"),
       allowNull: true,
@@ -88,7 +88,7 @@ const Service = sequelize.define(
     },
   },
   {
-    tableName: "services", // Fixed lowercase table name to prevent Linux/Render 500 errors
+    tableName: "services",
     timestamps: true,
   }
 );
