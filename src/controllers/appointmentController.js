@@ -54,7 +54,6 @@ exports.getUserAppointments = async (req, res) => {
   }
 };
 
-// Fixes the 404 on /api/appointments/booked-slots
 exports.getBookedSlots = async (req, res) => {
   try {
     const { date } = req.query;
@@ -93,25 +92,43 @@ exports.createAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide appointment date and time.' });
     }
 
-    // Bulletproof Foreign Key validation: Prevents SQL 500 errors if serviceId doesn't exist
+    const finalServiceName = serviceName || 'Beauty Ritual';
+    const finalCategory = category || 'General';
+    const finalAmount = amount || 999;
+
+    // =========================================================================
+    // BULLETPROOF FOREIGN KEY RESOLUTION (Guarantees a valid service ID in MySQL)
+    // =========================================================================
     let validServiceId = null;
+
     if (serviceId) {
       const foundService = await Service.findByPk(serviceId);
       if (foundService) {
         validServiceId = foundService.id;
-        serviceName = serviceName || foundService.name;
-        category = category || foundService.category;
       }
+    }
+
+    // If serviceId wasn't found or wasn't provided, find or create the service by name
+    if (!validServiceId) {
+      const [matchedService] = await Service.findOrCreate({
+        where: { name: finalServiceName },
+        defaults: {
+          category: finalCategory,
+          amount: finalAmount,
+          duration: '30 mins'
+        }
+      });
+      validServiceId = matchedService.id;
     }
 
     const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     const appointment = await Appointment.create({
       userId,
-      serviceId: validServiceId, // Safely nullified if invalid to bypass FK crashes
-      serviceName: serviceName || 'Beauty Ritual',
-      category: category || 'General',
-      amount: amount || 999,
+      serviceId: validServiceId, // Guaranteed to exist in the Services table!
+      serviceName: finalServiceName,
+      category: finalCategory,
+      amount: finalAmount,
       type: type || 'SALON',
       date,
       time,
