@@ -29,33 +29,35 @@ const allowedOrigins = [
   "https://beautyvibee.vercel.app",
   "https://beautyvibe-admin.vercel.app",
   "https://beautyvibes.in",
+  "https://www.beautyvibes.in", // Explicitly whitelisted to prevent www 403 blocks
 ];
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow non-browser requests (Postman, mobile apps, server-to-server)
-      if (!origin) return callback(null, true);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser requests (Postman, mobile apps, server-to-server)
+    if (!origin) return callback(null, true);
 
-      // Clean trailing slash from incoming origin if any
-      const cleanOrigin = origin.replace(/\/+$/, "");
+    // Clean trailing slash from incoming origin if any
+    const cleanOrigin = origin.replace(/\/+$/, "");
 
-      // Check if it's explicitly allowed OR is any Vercel deployment (*.vercel.app)
-      const isVercelSubdomain = /\.vercel\.app$/i.test(cleanOrigin);
-      const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
+    // Check if it's explicitly allowed OR is any Vercel deployment (*.vercel.app)
+    const isVercelSubdomain = /\.vercel\.app$/i.test(cleanOrigin);
+    const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
 
-      if (isExplicitlyAllowed || isVercelSubdomain) {
-        return callback(null, true);
-      }
+    if (isExplicitlyAllowed || isVercelSubdomain) {
+      return callback(null, true);
+    }
 
-      console.warn(`[CORS Blocked] Unrecognized origin attempted access: "${origin}"`);
-      return callback(new Error("Origin not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Idempotency-Key"],
-  })
-);
+    console.warn(`[CORS Blocked] Unrecognized origin attempted access: "${origin}"`);
+    return callback(new Error("Origin not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Idempotency-Key"],
+};
+
+// Apply CORS globally (automatically handles preflight OPTIONS requests without crashing path-to-regexp)
+app.use(cors(corsOptions));
 
 // --------------------------------------------------
 // BODY PARSING (Increased limit to 15mb for large payloads/images)

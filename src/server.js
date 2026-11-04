@@ -25,16 +25,19 @@ require("./models/Address");
 const PORT = Number(process.env.PORT || 5000);
 const server = http.createServer(app);
 
-// Configure allowed frontend URLs for CORS (Fixed production comma-separated origins)
+// Configure allowed frontend URLs for CORS (Added missing www.beautyvibes.in)
 const allowedOrigins = (
   process.env.FRONTEND_URLS ||
   (process.env.NODE_ENV !== "production"
     ? "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://beautyvibee.vercel.app"
-    : "https://beautyvibe-admin.vercel.app,https://beautyvibes.in,https://beautyvibee.vercel.app")
+    : "https://beautyvibe-admin.vercel.app,https://beautyvibes.in,https://www.beautyvibes.in,https://beautyvibee.vercel.app")
 )
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
+
+// Share allowedOrigins with Express app.js if needed
+app.set("allowedOrigins", allowedOrigins);
 
 const io = new Server(server, {
   cors: {
