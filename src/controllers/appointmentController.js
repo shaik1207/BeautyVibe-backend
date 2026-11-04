@@ -1,6 +1,7 @@
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
 const User = require('../models/User');
+const { Op } = require('sequelize');
 
 const processedRequests = new Set();
 
@@ -12,22 +13,11 @@ exports.getUserAppointments = async (req, res) => {
 
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin';
-
     const queryOptions = isAdmin ? {} : { where: { userId } };
 
     queryOptions.include = [
-      {
-        model: Service,
-        as: 'service',
-        attributes: ['name', 'category', 'duration', 'image'],
-        required: false
-      },
-      {
-        model: User,
-        as: 'user',
-        attributes: ['name', 'email', 'phone', 'avatar'],
-        required: false
-      }
+      { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
+      { model: User, as: 'user', attributes: ['name', 'email', 'phone', 'avatar'], required: false }
     ];
     queryOptions.order = [['createdAt', 'DESC']];
 
@@ -64,6 +54,27 @@ exports.getUserAppointments = async (req, res) => {
   }
 };
 
+// Fixes the 404 on /api/appointments/booked-slots
+exports.getBookedSlots = async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ success: false, message: 'Date query parameter is required.' });
+    }
+
+    const bookedAppointments = await Appointment.findAll({
+      where: { date, status: { [Op.ne]: 'Cancelled' } },
+      attributes: ['time', 'date']
+    });
+
+    const bookedSlots = bookedAppointments.map(app => app.time);
+    return res.status(200).json({ success: true, data: bookedSlots });
+  } catch (error) {
+    console.error("Get Booked Slots Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.createAppointment = async (req, res) => {
   try {
     const idempotencyKey = req.headers['idempotency-key'] || req.body.requestId;
@@ -71,28 +82,25 @@ exports.createAppointment = async (req, res) => {
     if (idempotencyKey && processedRequests.has(idempotencyKey)) {
       const existing = await Appointment.findOne({ where: { requestId: idempotencyKey } });
       if (existing) {
-        return res.status(200).json({
-          success: true,
-          duplicateRequest: true,
-          message: 'Appointment already processed.',
-          data: existing
-        });
+        return res.status(200).json({ success: true, duplicateRequest: true, message: 'Appointment already processed.', data: existing });
       }
     }
 
-    const { serviceId, serviceName, category, amount, type, date, time, requestId } = req.body;
+    let { serviceId, serviceName, category, amount, type, date, time, requestId } = req.body;
     const userId = req.user?.id || 1;
 
-    if (!serviceName || !date || !time) {
-      return res.status(400).json({ success: false, message: 'Please provide service name, date, and time.' });
+    if (!date || !time) {
+      return res.status(400).json({ success: false, message: 'Please provide appointment date and time.' });
     }
 
-    // Robust validation: Check if serviceId exists in MySQL Services table to prevent FK crashes
+    // Bulletproof Foreign Key validation: Prevents SQL 500 errors if serviceId doesn't exist
     let validServiceId = null;
     if (serviceId) {
-      const serviceExists = await Service.findByPk(serviceId);
-      if (serviceExists) {
-        validServiceId = serviceId;
+      const foundService = await Service.findByPk(serviceId);
+      if (foundService) {
+        validServiceId = foundService.id;
+        serviceName = serviceName || foundService.name;
+        category = category || foundService.category;
       }
     }
 
@@ -100,8 +108,8 @@ exports.createAppointment = async (req, res) => {
 
     const appointment = await Appointment.create({
       userId,
-      serviceId: validServiceId, // Safely handled as null or valid foreign key ID
-      serviceName,
+      serviceId: validServiceId, // Safely nullified if invalid to bypass FK crashes
+      serviceName: serviceName || 'Beauty Ritual',
       category: category || 'General',
       amount: amount || 999,
       type: type || 'SALON',
@@ -121,11 +129,7 @@ exports.createAppointment = async (req, res) => {
       io.emit('newAppointment', appointment);
     }
 
-    return res.status(201).json({
-      success: true,
-      message: 'Appointment booked successfully.',
-      data: appointment
-    });
+    return res.status(201).json({ success: true, message: 'Appointment booked successfully.', data: appointment });
   } catch (error) {
     console.error("Create Appointment Error:", error);
     return res.status(500).json({ success: false, message: error.message || 'Internal server error.' });
@@ -146,9 +150,7 @@ exports.updateAppointmentStatus = async (req, res) => {
     await appointment.save();
 
     const io = req.app.get('io');
-    if (io) {
-      io.emit('appointmentUpdated', appointment);
-    }
+    if (io) io.emit('appointmentUpdated', appointment);
 
     return res.status(200).json({ success: true, message: 'Status updated successfully.', data: appointment });
   } catch (error) {
@@ -171,9 +173,7 @@ exports.assignStaff = async (req, res) => {
     await appointment.save();
 
     const io = req.app.get('io');
-    if (io) {
-      io.emit('appointmentUpdated', appointment);
-    }
+    if (io) io.emit('appointmentUpdated', appointment);
 
     return res.status(200).json({ success: true, message: 'Expert assigned successfully.', data: appointment });
   } catch (error) {

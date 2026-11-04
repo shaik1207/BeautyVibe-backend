@@ -8,6 +8,7 @@ const authRoutes = require("./routes/authRoutes");
 const appointmentRoutes = require("./routes/appointmentRoutes");
 const serviceRoutes = require("./routes/serviceRoutes");
 const tableRoutes = require("./routes/tableRoutes");
+const userRoutes = require("./routes/userRoutes"); // Fixed: Imported user routes to resolve 404 errors
 
 // Import dashboard routes
 const customerRoutes = require("./routes/customerRoutes");
@@ -89,6 +90,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api/tables", tableRoutes);
+app.use("/api/users", userRoutes); // Fixed: Mounted user routes here (/api/users/profile, /api/users/addresses, etc.)
 
 // --------------------------------------------------
 // DASHBOARD ROUTES
