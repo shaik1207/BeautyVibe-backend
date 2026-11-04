@@ -1,12 +1,15 @@
-const express = require('express');
-const router = express.Router();
+const router = require('express').Router();
 const { 
   getUserAppointments, 
   createAppointment, 
   updateAppointmentStatus, 
-  assignStaff 
+  assignStaff,
+  getBookedSlots 
 } = require('../controllers/appointmentController');
 const { protect } = require('../middleware/authMiddleware');
+
+router.get('/booked-slots', protect, getBookedSlots);
+
 
 router.get('/', protect, getUserAppointments);
 router.post('/', protect, createAppointment);
