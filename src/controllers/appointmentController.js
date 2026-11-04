@@ -3,8 +3,6 @@ const Service = require('../models/Service');
 const User = require('../models/User');
 const { Op } = require('sequelize');
 
-const processedRequests = new Set();
-
 exports.getUserAppointments = async (req, res) => {
   try {
     if (!req.user) {
@@ -78,14 +76,22 @@ exports.createAppointment = async (req, res) => {
   try {
     const idempotencyKey = req.headers['idempotency-key'] || req.body.requestId;
 
-    if (idempotencyKey && processedRequests.has(idempotencyKey)) {
-      const existing = await Appointment.findOne({ where: { requestId: idempotencyKey } });
-      if (existing) {
-        return res.status(200).json({ success: true, duplicateRequest: true, message: 'Appointment already processed.', data: existing });
+    // =========================================================================
+    // 1. DATABASE-LEVEL IDEMPOTENCY CHECK (Survives Render restarts)
+    // =========================================================================
+    if (idempotencyKey) {
+      const existingRequest = await Appointment.findOne({ where: { requestId: idempotencyKey } });
+      if (existingRequest) {
+        return res.status(200).json({
+          success: true,
+          duplicateRequest: true,
+          message: 'Appointment already processed.',
+          data: existingRequest
+        });
       }
     }
 
-    let { serviceId, serviceName, category, amount, type, date, time, requestId, address, paymentMethod } = req.body;
+    let { serviceId, serviceName, category, amount, type, date, time, requestId } = req.body;
 
     if (!date || !time) {
       return res.status(400).json({ success: false, message: 'Please provide appointment date and time.' });
@@ -96,7 +102,7 @@ exports.createAppointment = async (req, res) => {
     const finalAmount = amount || 999;
 
     // =========================================================================
-    // 1. GUARANTEE A VALID USER ID IN MYSQL
+    // 2. GUARANTEE A VALID USER ID IN MYSQL
     // =========================================================================
     let mysqlUserId = null;
     if (req.user && (req.user.email || req.user.id)) {
@@ -111,19 +117,18 @@ exports.createAppointment = async (req, res) => {
     }
 
     if (!mysqlUserId) {
-      let anyUser = await User.findOne();
-      if (!anyUser) {
-        anyUser = await User.create({ email: 'guest@beautyvibe.in', name: 'Valued Guest', role: 'client' });
-      }
-      mysqlUserId = anyUser.id;
+      const [guestUser] = await User.findOrCreate({
+        where: { email: 'guest@beautyvibe.in' },
+        defaults: { name: 'Valued Guest', role: 'client' }
+      });
+      mysqlUserId = guestUser.id;
     }
 
     // =========================================================================
-    // 2. GUARANTEE A VALID SERVICE ID IN MYSQL (Fixes ER_NO_REFERENCED_ROW_2)
+    // 3. GUARANTEE A VALID SERVICE ID IN MYSQL
     // =========================================================================
     let validServiceId = null;
 
-    // Check if provided serviceId exists in the database
     if (serviceId !== undefined && serviceId !== null && !isNaN(Number(serviceId))) {
       const foundService = await Service.findByPk(Number(serviceId));
       if (foundService) {
@@ -131,7 +136,6 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    // If ID doesn't exist, find or create by service name
     if (!validServiceId) {
       const [matchedService] = await Service.findOrCreate({
         where: { name: finalServiceName },
@@ -144,28 +148,22 @@ exports.createAppointment = async (req, res) => {
       validServiceId = matchedService.id;
     }
 
-    // Ultimate fallback: grab any service in the database or create a default one
     if (!validServiceId) {
-      let anyService = await Service.findOne();
-      if (!anyService) {
-        anyService = await Service.create({
-          name: 'Beauty Ritual',
-          category: 'General',
-          amount: 999,
-          duration: '30 mins'
-        });
-      }
+      const [anyService] = await Service.findOrCreate({
+        where: { name: 'Beauty Ritual' },
+        defaults: { category: 'General', amount: 999, duration: '30 mins' }
+      });
       validServiceId = anyService.id;
     }
 
     const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     // =========================================================================
-    // 3. CREATE APPOINTMENT RECORD WITH SANITIZED FKs
+    // 4. CREATE APPOINTMENT RECORD (Only core columns to avoid schema crashes)
     // =========================================================================
     const appointmentData = {
       userId: mysqlUserId,
-      serviceId: validServiceId, // Guaranteed valid integer primary key in Services table
+      serviceId: validServiceId,
       serviceName: finalServiceName,
       category: finalCategory,
       amount: finalAmount,
@@ -177,26 +175,23 @@ exports.createAppointment = async (req, res) => {
       requestId: requestId || idempotencyKey || `REQ-${Date.now()}`,
     };
 
-    if (address) appointmentData.address = address;
-    if (paymentMethod) appointmentData.paymentMethod = paymentMethod;
-
     const appointment = await Appointment.create(appointmentData);
-
-    if (idempotencyKey) {
-      processedRequests.add(idempotencyKey);
-    }
 
     const io = req.app.get('io');
     if (io) {
       io.emit('newAppointment', appointment);
     }
 
-    return res.status(201).json({ success: true, message: 'Appointment booked successfully.', data: appointment });
+    return res.status(201).json({
+      success: true,
+      message: 'Appointment booked successfully.',
+      data: appointment
+    });
   } catch (error) {
     console.error("Create Appointment Error:", error);
     return res.status(500).json({ 
       success: false, 
-      message: 'Unable to create appointment.', 
+      message: error.message || 'Internal server error.',
       code: error.original?.code || error.parent?.code || error.code || 'INTERNAL_ERROR',
       sqlError: error.original?.sqlMessage || error.parent?.message || error.message 
     });
