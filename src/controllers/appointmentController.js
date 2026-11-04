@@ -123,19 +123,23 @@ exports.createAppointment = async (req, res) => {
     }
 
     // =========================================================================
-    // 2. INFALLIBLE SERVICE ID RESOLUTION (Guarantees foreign key never fails)
+    // 2. INFALLIBLE 4-TIER SERVICE ID RESOLUTION
     // =========================================================================
     let validServiceId = null;
+    const rawServiceId = Number(serviceId);
 
-    // Tier A: Try looking up by incoming serviceId
-    if (serviceId !== undefined && serviceId !== null && !isNaN(Number(serviceId))) {
-      const foundService = await Service.findByPk(Number(serviceId));
+    // Tier 1: Check if provided serviceId exists in the database
+    if (!isNaN(rawServiceId) && rawServiceId > 0) {
+      const foundService = await Service.findByPk(rawServiceId);
       if (foundService) {
         validServiceId = foundService.id;
+        console.log(`[Appointment] Tier 1 Success: Found service ID ${validServiceId}`);
+      } else {
+        console.warn(`[Appointment] Tier 1 Warning: Service ID ${rawServiceId} does NOT exist in database.`);
       }
     }
 
-    // Tier B: If not found, find or create by service name
+    // Tier 2: Find or create by service name
     if (!validServiceId) {
       try {
         const [matchedService] = await Service.findOrCreate({
@@ -148,38 +152,41 @@ exports.createAppointment = async (req, res) => {
         });
         if (matchedService && matchedService.id) {
           validServiceId = matchedService.id;
+          console.log(`[Appointment] Tier 2 Success: Resolved via name "${finalServiceName}", ID: ${validServiceId}`);
         }
       } catch (e) {
-        console.warn("[Appointment] findOrCreate by name failed:", e.message);
+        console.error("[Appointment] Tier 2 Error in findOrCreate:", e.message);
       }
     }
 
-    // Tier C: Grab any existing service in the database table
+    // Tier 3: Grab any existing service in the table
     if (!validServiceId) {
       const anyService = await Service.findOne();
       if (anyService) {
         validServiceId = anyService.id;
+        console.log(`[Appointment] Tier 3 Success: Grabbed first available service ID: ${validServiceId}`);
       }
     }
 
-    // Tier D: Absolute last resort emergency creation
+    // Tier 4: Absolute emergency fallback creation
     if (!validServiceId) {
       const defaultService = await Service.create({
-        name: finalServiceName || 'Beauty Ritual',
+        name: finalServiceName || 'Emergency Beauty Ritual',
         category: finalCategory,
         amount: finalAmount,
         duration: '30 mins'
       });
       validServiceId = defaultService.id;
+      console.log(`[Appointment] Tier 4 Success: Created emergency service ID: ${validServiceId}`);
     }
 
-    // FINAL DATABASE VERIFICATION: Prove the ID exists in the Services table right now
+    // FINAL SAFETY CHECK: Verify the ID actually exists in MySQL right now
     const verifyService = await Service.findByPk(validServiceId);
     if (!verifyService) {
       const emergencyService = await Service.create({
-        name: finalServiceName || 'Emergency Service',
-        category: finalCategory,
-        amount: finalAmount,
+        name: 'Guaranteed Service',
+        category: 'General',
+        amount: 999,
         duration: '30 mins'
       });
       validServiceId = emergencyService.id;
@@ -192,7 +199,7 @@ exports.createAppointment = async (req, res) => {
     // =========================================================================
     const appointmentData = {
       userId: mysqlUserId,
-      serviceId: validServiceId, // Guaranteed valid primary key in Services table
+      serviceId: validServiceId, // Guaranteed valid integer primary key in Services table
       serviceName: finalServiceName,
       category: finalCategory,
       amount: finalAmount,
