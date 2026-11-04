@@ -97,18 +97,30 @@ exports.createAppointment = async (req, res) => {
     const finalAmount = amount || 999;
 
     // =========================================================================
-    // BULLETPROOF FOREIGN KEY RESOLUTION (Guarantees a valid service ID in MySQL)
+    // STRICT FOREIGN KEY SANITIZATION (Prevents type-casting & FK crashes)
     // =========================================================================
     let validServiceId = null;
 
-    if (serviceId) {
-      const foundService = await Service.findByPk(serviceId);
-      if (foundService) {
-        validServiceId = foundService.id;
+    // Filter out dirty string artifacts ("undefined", "null", "", etc.)
+    const isCleanServiceId = 
+      serviceId !== undefined && 
+      serviceId !== null && 
+      serviceId !== '' && 
+      serviceId !== 'undefined' && 
+      serviceId !== 'null';
+
+    if (isCleanServiceId) {
+      try {
+        const foundService = await Service.findByPk(serviceId);
+        if (foundService) {
+          validServiceId = foundService.id;
+        }
+      } catch (lookupErr) {
+        console.warn("[Appointment Warning] Invalid serviceId format provided, falling back to findOrCreate.");
       }
     }
 
-    // If serviceId wasn't found or wasn't provided, find or create the service by name
+    // If no valid ID was found, safely find or create the service by name
     if (!validServiceId) {
       const [matchedService] = await Service.findOrCreate({
         where: { name: finalServiceName },
@@ -125,7 +137,7 @@ exports.createAppointment = async (req, res) => {
 
     const appointment = await Appointment.create({
       userId,
-      serviceId: validServiceId, // Guaranteed to exist in the Services table!
+      serviceId: validServiceId, // Guaranteed to be a valid integer ID present in Services table
       serviceName: finalServiceName,
       category: finalCategory,
       amount: finalAmount,
