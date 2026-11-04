@@ -1,7 +1,7 @@
 const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
-// Detect if running on Render (production) or locally (development)
+
 const isProduction = process.env.NODE_ENV === 'production';
 
 const sequelize = new Sequelize(
@@ -13,7 +13,7 @@ const sequelize = new Sequelize(
     port: process.env.DB_PORT || 3306,
     dialect: 'mysql',
     logging: false,
-    // Connection pooling to maintain stable connection between Render & Aiven
+
     pool: {
       max: 5,
       min: 0,
@@ -22,14 +22,14 @@ const sequelize = new Sequelize(
     },
     dialectOptions: isProduction 
       ? {
-          // AIVEN / PRODUCTION SECURE SETTINGS
+          
           ssl: {
             require: true,
             rejectUnauthorized: false,
           },
-          connectTimeout: 60000, // Prevents sudden timeout drops on cold starts
+          connectTimeout: 60000, 
         } 
-      : {}, // LOCALHOST SETTINGS (No SSL required)
+      : {}, 
   }
 );
 

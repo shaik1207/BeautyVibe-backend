@@ -88,7 +88,7 @@ const Service = sequelize.define(
     },
   },
   {
-    tableName: "Services",
+    tableName: "services", // Fixed lowercase table name to prevent Linux/Render 500 errors
     timestamps: true,
   }
 );
