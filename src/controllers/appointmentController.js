@@ -1,5 +1,9 @@
 
-const { Op, UniqueConstraintError } = require("sequelize");
+const {
+  Op,
+  UniqueConstraintError,
+} = require("sequelize");
+
 const { randomUUID } = require("crypto");
 
 const sequelize = require("../config/database");
@@ -7,9 +11,9 @@ const Appointment = require("../models/Appointment");
 const Service = require("../models/Service");
 const User = require("../models/User");
 
-// ============================================
+// ======================================================
 // HELPERS
-// ============================================
+// ======================================================
 
 const sendError = (res, status, message) => {
   return res.status(status).json({
@@ -21,7 +25,11 @@ const sendError = (res, status, message) => {
 const getAuthenticatedUserId = (req) => {
   const id = Number(req.user?.id);
 
-  return Number.isInteger(id) && id > 0 ? id : null;
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return null;
+  }
+
+  return id;
 };
 
 const normalizeServiceId = (value) => {
@@ -37,15 +45,21 @@ const normalizeServiceId = (value) => {
 
   const id = Number(value);
 
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
+  return Number.isSafeInteger(id) && id > 0
+    ? id
+    : null;
 };
 
 const getRequestId = (req) => {
   const value =
-    req.headers["idempotency-key"] ||
+    req.get("Idempotency-Key") ||
     req.body?.requestId;
 
-  if (value === undefined || value === null || value === "") {
+  if (
+    value === undefined ||
+    value === null ||
+    String(value).trim() === ""
+  ) {
     return randomUUID();
   }
 
@@ -58,16 +72,84 @@ const getRequestId = (req) => {
   return requestId;
 };
 
-// ============================================
+const formatAppointment = (appointment) => {
+  const plain = appointment.get
+    ? appointment.get({ plain: true })
+    : appointment;
+
+  const service = plain.service || null;
+  const user = plain.user || null;
+
+  return {
+    id: plain.id,
+    _id: plain.id,
+
+    serviceId: plain.serviceId ?? null,
+
+    passCode:
+      plain.passCode || `PASS-${plain.id}`,
+
+    requestId:
+      plain.requestId || `REQ-${plain.id}`,
+
+    serviceName:
+      service?.name ||
+      plain.serviceName ||
+      "Service information unavailable",
+
+    category:
+      service?.category ||
+      plain.category ||
+      "General",
+
+    amount:
+      plain.amount === null ||
+      plain.amount === undefined
+        ? null
+        : Number(plain.amount),
+
+    type: plain.type || "SALON",
+
+    date: plain.date || null,
+    time: plain.time || null,
+
+    status: plain.status || "Pending",
+
+    assignedStaff: plain.assignedStaff || "",
+
+    user: user
+      ? {
+          id: user.id,
+          name: user.name || "",
+          email: user.email || "",
+          phone: user.phone || "",
+          avatar: user.avatar || "",
+        }
+      : {
+          name: "Customer information unavailable",
+          email: "",
+          phone: "",
+          avatar: "",
+        },
+
+    createdAt: plain.createdAt || null,
+  };
+};
+
+// ======================================================
 // GET USER APPOINTMENTS
-// ============================================
+// ======================================================
 
 exports.getUserAppointments = async (req, res) => {
   try {
     const userId = getAuthenticatedUserId(req);
 
     if (!userId) {
-      return sendError(res, 401, "Authentication required.");
+      return sendError(
+        res,
+        401,
+        "Authentication required."
+      );
     }
 
     const isAdmin = req.user?.role === "admin";
@@ -79,76 +161,49 @@ exports.getUserAppointments = async (req, res) => {
         {
           model: Service,
           as: "service",
-          attributes: ["id", "name", "category", "duration", "image"],
+          attributes: [
+            "id",
+            "name",
+            "category",
+            "duration",
+            "image",
+          ],
           required: false,
         },
         {
           model: User,
           as: "user",
-          attributes: ["id", "name", "email", "phone", "avatar"],
+          attributes: [
+            "id",
+            "name",
+            "email",
+            "phone",
+            "avatar",
+          ],
           required: false,
         },
       ],
 
-      order: [["createdAt", "DESC"]],
+      order: [
+        ["createdAt", "DESC"],
+      ],
     });
 
-    const formatted = appointments.map((app) => {
-      const plain = app.get({ plain: true });
-
-      return {
-        _id: plain.id,
-        id: plain.id,
-
-        serviceId: plain.serviceId,
-
-        passCode: plain.passCode || `PASS-${plain.id}`,
-        requestId: plain.requestId || `REQ-${plain.id}`,
-
-        serviceName:
-          plain.service?.name ||
-          plain.serviceName ||
-          "Beauty Ritual",
-
-        category:
-          plain.service?.category ||
-          plain.category ||
-          "General",
-
-        amount: Number(plain.amount || 0),
-
-        type: plain.type || "SALON",
-
-        date: plain.date,
-        time: plain.time,
-
-        status: plain.status || "Pending",
-
-        assignedStaff: plain.assignedStaff || "",
-
-        user: plain.user
-          ? {
-              id: plain.user.id,
-              name: plain.user.name,
-              email: plain.user.email,
-              phone: plain.user.phone,
-              avatar: plain.user.avatar || "",
-            }
-          : {
-              name: "Valued Client",
-              avatar: "",
-            },
-
-        createdAt: plain.createdAt,
-      };
-    });
+    const formatted = appointments.map(
+      formatAppointment
+    );
 
     return res.status(200).json({
       success: true,
+      count: formatted.length,
       data: formatted,
     });
+
   } catch (error) {
-    console.error("[BeautyVibe] Get appointments error:", error);
+    console.error(
+      "[BeautyVibe] Get appointments failed:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -157,15 +212,18 @@ exports.getUserAppointments = async (req, res) => {
   }
 };
 
-// ============================================
+// ======================================================
 // GET BOOKED SLOTS
-// ============================================
+// ======================================================
 
 exports.getBookedSlots = async (req, res) => {
   try {
     const { date } = req.query;
 
-    if (!date) {
+    if (
+      typeof date !== "string" ||
+      !date.trim()
+    ) {
       return sendError(
         res,
         400,
@@ -173,16 +231,21 @@ exports.getBookedSlots = async (req, res) => {
       );
     }
 
-    const bookedAppointments = await Appointment.findAll({
-      where: {
-        date,
-        status: {
-          [Op.ne]: "Cancelled",
-        },
-      },
+    const bookedAppointments =
+      await Appointment.findAll({
+        where: {
+          date: date.trim(),
 
-      attributes: ["time", "date"],
-    });
+          status: {
+            [Op.ne]: "Cancelled",
+          },
+        },
+
+        attributes: [
+          "time",
+          "date",
+        ],
+      });
 
     const bookedSlots = bookedAppointments.map(
       (appointment) => appointment.time
@@ -192,8 +255,12 @@ exports.getBookedSlots = async (req, res) => {
       success: true,
       data: bookedSlots,
     });
+
   } catch (error) {
-    console.error("[BeautyVibe] Get booked slots error:", error);
+    console.error(
+      "[BeautyVibe] Get booked slots failed:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -202,15 +269,18 @@ exports.getBookedSlots = async (req, res) => {
   }
 };
 
-// ============================================
+// ======================================================
 // CREATE APPOINTMENT
-// ============================================
+// ======================================================
 
 exports.createAppointment = async (req, res) => {
-  let transaction;
+  let transaction = null;
+
+  const requestId = getRequestId(req);
 
   try {
-    // 1. Require authentication
+    // 1. Verify authenticated customer.
+
     const userId = getAuthenticatedUserId(req);
 
     if (!userId) {
@@ -221,38 +291,7 @@ exports.createAppointment = async (req, res) => {
       );
     }
 
-    // 2. Validate required fields
-    const {
-      serviceId,
-      serviceName,
-      category,
-      amount,
-      type,
-      date,
-      time,
-    } = req.body || {};
-
-    if (!date || !time) {
-      return sendError(
-        res,
-        400,
-        "Please provide appointment date and time."
-      );
-    }
-
-    // 3. Validate service ID
-    const validServiceId = normalizeServiceId(serviceId);
-
-    if (!validServiceId) {
-      return sendError(
-        res,
-        400,
-        "A valid service ID is required. Please select the service again."
-      );
-    }
-
-    // 4. Validate idempotency key
-    const requestId = getRequestId(req);
+    // 2. Validate request ID.
 
     if (!requestId) {
       return sendError(
@@ -262,36 +301,81 @@ exports.createAppointment = async (req, res) => {
       );
     }
 
-    // 5. Check whether this request was already processed
-    const existingAppointment = await Appointment.findOne({
-      where: { requestId },
-    });
+    // 3. Read booking information.
+
+    const {
+      serviceId,
+      date,
+      time,
+      type,
+    } = req.body || {};
+
+    if (
+      typeof date !== "string" ||
+      !date.trim() ||
+      typeof time !== "string" ||
+      !time.trim()
+    ) {
+      return sendError(
+        res,
+        400,
+        "Please provide appointment date and time."
+      );
+    }
+
+    // 4. Validate the actual database service ID.
+
+    const validServiceId =
+      normalizeServiceId(serviceId);
+
+    if (!validServiceId) {
+      return sendError(
+        res,
+        400,
+        "A valid service ID is required. Please select your service again."
+      );
+    }
+
+    // 5. Check for an existing booking.
+
+    const existingAppointment =
+      await Appointment.findOne({
+        where: {
+          requestId,
+        },
+      });
 
     if (existingAppointment) {
-      if (Number(existingAppointment.userId) !== userId) {
+      if (
+        Number(existingAppointment.userId) !== userId
+      ) {
         return sendError(
           res,
           409,
-          "This booking request ID is already in use."
+          "This booking request ID belongs to another account."
         );
       }
 
       return res.status(200).json({
         success: true,
         duplicateRequest: true,
-        message: "Appointment already processed.",
-        data: existingAppointment,
+        message: "Existing appointment recovered.",
+        data: formatAppointment(existingAppointment),
       });
     }
 
-    // 6. Start database transaction
+    // 6. Start transaction.
+
     transaction = await sequelize.transaction();
 
-    // 7. Verify that service really exists
-    const service = await Service.findByPk(validServiceId, {
-      transaction,
-      lock: transaction.LOCK.SHARE,
-    });
+    // 7. Verify service exists.
+
+    const service = await Service.findByPk(
+      validServiceId,
+      {
+        transaction,
+      }
+    );
 
     if (!service) {
       await transaction.rollback();
@@ -300,14 +384,18 @@ exports.createAppointment = async (req, res) => {
       return sendError(
         res,
         404,
-        "Selected service was not found. Please refresh the services and try again."
+        "Selected service was not found in the database. Please refresh Services and select it again."
       );
     }
 
-    // 8. Verify user exists
-    const user = await User.findByPk(userId, {
-      transaction,
-    });
+    // 8. Verify customer exists.
+
+    const user = await User.findByPk(
+      userId,
+      {
+        transaction,
+      }
+    );
 
     if (!user) {
       await transaction.rollback();
@@ -316,60 +404,67 @@ exports.createAppointment = async (req, res) => {
       return sendError(
         res,
         401,
-        "Your account could not be verified. Please log in again."
+        "Customer account not found. Please log in again."
       );
     }
 
-    // 9. Use the service price from the database
-    const databasePrice = Number(service.price);
+    // 9. Calculate price from database.
 
-    if (!Number.isFinite(databasePrice) || databasePrice < 0) {
+    const finalAmount = Number(service.price);
+
+    if (
+      !Number.isFinite(finalAmount) ||
+      finalAmount < 0
+    ) {
       await transaction.rollback();
       transaction = null;
 
       return sendError(
         res,
         400,
-        "The selected service has an invalid price."
+        "The selected service has an invalid database price."
       );
     }
 
-    // NOTE:
-    // If your booking system applies discounts or travel fees,
-    // calculate those server-side here before creating the appointment.
-    const finalAmount = databasePrice;
-
-    const finalServiceName = service.name;
-    const finalCategory = service.category || "General";
+    // Apply any discounts or travel charges here,
+    // calculated and validated on the backend.
 
     const finalType =
-      type === "HOME" || type === "SALON"
-        ? type
-        : "HOME";
+      type === "SALON" ? "SALON" : "HOME";
 
     const passCode =
-      `PASS-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+      `PASS-${randomUUID()
+        .replace(/-/g, "")
+        .slice(0, 8)
+        .toUpperCase()}`;
 
-    // 10. Create appointment
+    // 10. Create appointment.
+
     const appointment = await Appointment.create(
       {
-        userId,
+        userId: user.id,
 
         serviceId: service.id,
 
-        serviceName: finalServiceName,
-        category: finalCategory,
+        serviceName: service.name,
+
+        category:
+          service.category || "General",
 
         amount: finalAmount,
 
         type: finalType,
 
-        date: String(date).trim(),
-        time: String(time).trim(),
+        date: date.trim(),
+
+        time: time.trim(),
 
         status: "Pending",
 
+        assignedStaff: "",
+
         passCode,
+
         requestId,
       },
       {
@@ -377,59 +472,105 @@ exports.createAppointment = async (req, res) => {
       }
     );
 
-    // 11. Commit transaction
+    // 11. Commit.
+
     await transaction.commit();
     transaction = null;
 
-    // 12. Emit event only after successful database commit
+    // 12. Retrieve full appointment after commit.
+
+    const savedAppointment =
+      await Appointment.findByPk(
+        appointment.id,
+        {
+          include: [
+            {
+              model: Service,
+              as: "service",
+              attributes: [
+                "id",
+                "name",
+                "category",
+                "duration",
+                "image",
+              ],
+              required: false,
+            },
+            {
+              model: User,
+              as: "user",
+              attributes: [
+                "id",
+                "name",
+                "email",
+                "phone",
+                "avatar",
+              ],
+              required: false,
+            },
+          ],
+        }
+      );
+
+    // 13. Emit realtime event after successful commit.
+
     const io = req.app.get("io");
 
     if (io) {
-      io.emit("newAppointment", appointment);
+      io.emit(
+        "newAppointment",
+        savedAppointment || appointment
+      );
     }
 
     return res.status(201).json({
       success: true,
       message: "Appointment booked successfully.",
-      data: appointment,
+      data: formatAppointment(
+        savedAppointment || appointment
+      ),
     });
+
   } catch (error) {
+    // Roll back only if transaction is still active.
+
     if (transaction) {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
         console.error(
-          "[BeautyVibe] Transaction rollback error:",
+          "[BeautyVibe] Rollback failed:",
           rollbackError
         );
       }
     }
 
-    // Handle simultaneous duplicate requests
+    // Handle simultaneous duplicate requests.
+
     if (error instanceof UniqueConstraintError) {
       try {
-        const requestId = getRequestId(req);
-
-        const existing = requestId
-          ? await Appointment.findOne({
-              where: { requestId },
-            })
-          : null;
+        const existing =
+          await Appointment.findOne({
+            where: {
+              requestId,
+            },
+          });
 
         if (
           existing &&
-          Number(existing.userId) === getAuthenticatedUserId(req)
+          Number(existing.userId) ===
+            getAuthenticatedUserId(req)
         ) {
           return res.status(200).json({
             success: true,
             duplicateRequest: true,
-            message: "Appointment already processed.",
-            data: existing,
+            message: "Existing appointment recovered.",
+            data: formatAppointment(existing),
           });
         }
       } catch (lookupError) {
         console.error(
-          "[BeautyVibe] Duplicate lookup error:",
+          "[BeautyVibe] Duplicate lookup failed:",
           lookupError
         );
       }
@@ -441,30 +582,53 @@ exports.createAppointment = async (req, res) => {
       );
     }
 
+    // Detailed server-side diagnostics.
+
     console.error(
-      "[BeautyVibe] Create appointment error:",
-      error
+      "========== BEAUTYVIBE BOOKING ERROR =========="
+    );
+
+    console.error("Name:", error.name);
+    console.error("Message:", error.message);
+    console.error("SQL code:", error.original?.code);
+    console.error("SQL message:", error.original?.message);
+    console.error("SQL:", error.sql);
+    console.error("Constraint:", error.parent?.constraint);
+    console.error("Table:", error.parent?.table);
+
+    console.error(
+      "=============================================="
     );
 
     return res.status(500).json({
       success: false,
       message: "Unable to create appointment.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      code: error.original?.code || error.name,
     });
   }
 };
 
-// ============================================
+// ======================================================
 // UPDATE APPOINTMENT STATUS
-// ============================================
+// ======================================================
 
-exports.updateAppointmentStatus = async (req, res) => {
+exports.updateAppointmentStatus = async (
+  req,
+  res
+) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+
+    const userId = getAuthenticatedUserId(req);
+
+    if (!userId) {
+      return sendError(
+        res,
+        401,
+        "Authentication required."
+      );
+    }
 
     const allowedStatuses = [
       "Pending",
@@ -475,21 +639,44 @@ exports.updateAppointmentStatus = async (req, res) => {
     ];
 
     if (!allowedStatuses.includes(status)) {
-      return sendError(res, 400, "Invalid appointment status.");
+      return sendError(
+        res,
+        400,
+        "Invalid appointment status."
+      );
     }
 
-    const appointment = await Appointment.findByPk(id);
+    const appointment =
+      await Appointment.findByPk(id);
 
     if (!appointment) {
-      return sendError(res, 404, "Appointment not found.");
+      return sendError(
+        res,
+        404,
+        "Appointment not found."
+      );
     }
 
-    await appointment.update({ status });
+    // Only admins can update appointment status.
+    if (req.user?.role !== "admin") {
+      return sendError(
+        res,
+        403,
+        "Administrator access required."
+      );
+    }
+
+    await appointment.update({
+      status,
+    });
 
     const io = req.app.get("io");
 
     if (io) {
-      io.emit("appointmentUpdated", appointment);
+      io.emit(
+        "appointmentUpdated",
+        appointment
+      );
     }
 
     return res.status(200).json({
@@ -497,8 +684,12 @@ exports.updateAppointmentStatus = async (req, res) => {
       message: "Status updated successfully.",
       data: appointment,
     });
+
   } catch (error) {
-    console.error("[BeautyVibe] Update status error:", error);
+    console.error(
+      "[BeautyVibe] Update status failed:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -507,27 +698,53 @@ exports.updateAppointmentStatus = async (req, res) => {
   }
 };
 
-// ============================================
+// ======================================================
 // ASSIGN STAFF
-// ============================================
+// ======================================================
 
 exports.assignStaff = async (req, res) => {
   try {
     const { id } = req.params;
     const { assignedStaff } = req.body;
 
-    if (
-      assignedStaff === undefined ||
-      assignedStaff === null ||
-      typeof assignedStaff !== "string"
-    ) {
-      return sendError(res, 400, "Valid staff name is required.");
+    const userId = getAuthenticatedUserId(req);
+
+    if (!userId) {
+      return sendError(
+        res,
+        401,
+        "Authentication required."
+      );
     }
 
-    const appointment = await Appointment.findByPk(id);
+    if (req.user?.role !== "admin") {
+      return sendError(
+        res,
+        403,
+        "Administrator access required."
+      );
+    }
+
+    if (
+      typeof assignedStaff !== "string" ||
+      !assignedStaff.trim()
+    ) {
+      return sendError(
+        res,
+        400,
+        "Valid staff name is required."
+      );
+    }
+
+    const appointment =
+      await Appointment.findByPk(id);
 
     if (!appointment) {
-      return sendError(res, 404, "Appointment not found.");
+      return sendError(
+        res,
+        404,
+        "Appointment not found."
+      );
     }
 
     await appointment.update({
@@ -537,7 +754,10 @@ exports.assignStaff = async (req, res) => {
     const io = req.app.get("io");
 
     if (io) {
-      io.emit("appointmentUpdated", appointment);
+      io.emit(
+        "appointmentUpdated",
+        appointment
+      );
     }
 
     return res.status(200).json({
@@ -545,8 +765,12 @@ exports.assignStaff = async (req, res) => {
       message: "Expert assigned successfully.",
       data: appointment,
     });
+
   } catch (error) {
-    console.error("[BeautyVibe] Assign staff error:", error);
+    console.error(
+      "[BeautyVibe] Assign staff failed:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
