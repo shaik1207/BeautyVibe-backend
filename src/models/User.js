@@ -26,11 +26,25 @@ const User = sequelize.define(
     firstName: {
       type: DataTypes.STRING(100),
       allowNull: true,
+      set(value) {
+        const normalized =
+          value === undefined || value === null
+            ? null
+            : String(value).trim();
+        this.setDataValue("firstName", normalized);
+      },
     },
 
     lastName: {
       type: DataTypes.STRING(100),
       allowNull: true,
+      set(value) {
+        const normalized =
+          value === undefined || value === null
+            ? null
+            : String(value).trim();
+        this.setDataValue("lastName", normalized);
+      },
     },
 
     name: {
@@ -55,7 +69,7 @@ const User = sequelize.define(
       set(value) {
         this.setDataValue(
           "email",
-          typeof value === "string"
+          typeof value === "string" && value.trim()
             ? value.trim().toLowerCase()
             : value
         );
@@ -78,14 +92,13 @@ const User = sequelize.define(
 
       set(value) {
         const normalized =
-          value === undefined || value === null
+          value === undefined || value === null || String(value).trim() === ""
             ? null
             : String(value).trim();
 
-        this.setDataValue("phone", normalized || null);
-        // Sync secondary fields automatically to prevent schema mismatches
-        this.setDataValue("mobile", normalized || null);
-        this.setDataValue("mobileNumber", normalized || null);
+        this.setDataValue("phone", normalized);
+        this.setDataValue("mobile", normalized);
+        this.setDataValue("mobileNumber", normalized);
       },
     },
 
@@ -96,13 +109,13 @@ const User = sequelize.define(
 
       set(value) {
         const normalized =
-          value === undefined || value === null
+          value === undefined || value === null || String(value).trim() === ""
             ? null
             : String(value).trim();
 
-        this.setDataValue("mobile", normalized || null);
-        this.setDataValue("phone", normalized || null);
-        this.setDataValue("mobileNumber", normalized || null);
+        this.setDataValue("mobile", normalized);
+        this.setDataValue("phone", normalized);
+        this.setDataValue("mobileNumber", normalized);
       },
     },
 
@@ -113,13 +126,13 @@ const User = sequelize.define(
 
       set(value) {
         const normalized =
-          value === undefined || value === null
+          value === undefined || value === null || String(value).trim() === ""
             ? null
             : String(value).trim();
 
-        this.setDataValue("mobileNumber", normalized || null);
-        this.setDataValue("phone", normalized || null);
-        this.setDataValue("mobile", normalized || null);
+        this.setDataValue("mobileNumber", normalized);
+        this.setDataValue("phone", normalized);
+        this.setDataValue("mobile", normalized);
       },
     },
 
@@ -155,6 +168,13 @@ const User = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: true,
       unique: true,
+      set(value) {
+        const normalized =
+          value === undefined || value === null || String(value).trim() === ""
+            ? null
+            : String(value).trim();
+        this.setDataValue("firebaseUid", normalized);
+      },
     },
 
     // ----------------------------------------
@@ -164,6 +184,13 @@ const User = sequelize.define(
     avatar: {
       type: DataTypes.TEXT,
       allowNull: true,
+      set(value) {
+        const normalized =
+          value === undefined || value === null || String(value).trim() === ""
+            ? null
+            : String(value).trim();
+        this.setDataValue("avatar", normalized);
+      },
     },
 
     // ----------------------------------------
@@ -254,19 +281,9 @@ const User = sequelize.define(
 
     hooks: {
       beforeValidate: (user) => {
-        // Normalize first name
-        if (typeof user.firstName === "string") {
-          user.firstName = user.firstName.trim();
-        }
-
-        // Normalize last name
-        if (typeof user.lastName === "string") {
-          user.lastName = user.lastName.trim();
-        }
-
-        // Automatically construct full name
-        const firstName = user.firstName || "";
-        const lastName = user.lastName || "";
+        // Automatically construct full name from firstName & lastName if available
+        const firstName = user.firstName ? user.firstName.trim() : "";
+        const lastName = user.lastName ? user.lastName.trim() : "";
 
         const combinedName = `${firstName} ${lastName}`.trim();
 
@@ -274,16 +291,6 @@ const User = sequelize.define(
           user.name = combinedName;
         } else if (typeof user.name === "string") {
           user.name = user.name.trim();
-        }
-
-        // Normalize Firebase UID
-        if (typeof user.firebaseUid === "string") {
-          user.firebaseUid = user.firebaseUid.trim() || null;
-        }
-
-        // Normalize avatar
-        if (typeof user.avatar === "string") {
-          user.avatar = user.avatar.trim() || null;
         }
       },
 
