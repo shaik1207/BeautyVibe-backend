@@ -151,7 +151,8 @@ const appointmentIncludes = () => [
   {
     model: User,
     as: "user",
-    attributes: ["id", "firstName", "lastName", "name", "email", "phone", "mobile", "mobileNumber", "avatar", "addresses"],
+    // FIXED: Removed non-existent 'mobile' and 'mobileNumber' columns from User attributes
+    attributes: ["id", "firstName", "lastName", "name", "email", "phone", "avatar", "addresses"],
     required: false,
   },
 ];
