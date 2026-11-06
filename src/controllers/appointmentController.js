@@ -1,4 +1,3 @@
-// controllers/appointmentController.js
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
 const User = require('../models/User');
@@ -22,19 +21,16 @@ exports.getUserAppointments = async (req, res) => {
       const plain = app.get({ plain: true });
       const dbUser = plain.user || {};
 
-      // Robust fallback resolution for real customer mobile number
+      // STRICT: Use the appointment's stored mobileNumber or phone. NEVER fall back to admin session phone.
       const resolvedMobile = 
         plain.mobileNumber || 
         plain.phone || 
         dbUser.phone || 
-        req.user?.phone || 
-        req.user?.mobile || 
         '';
 
       const resolvedName = 
         plain.customerName || 
         dbUser.name || 
-        req.user?.name || 
         'Valued Client';
 
       const resolvedAddress = 
@@ -60,9 +56,9 @@ exports.getUserAppointments = async (req, res) => {
         address: resolvedAddress,
         user: {
           name: resolvedName,
-          email: dbUser.email || req.user?.email || 'client@beautyvibe.in',
+          email: dbUser.email || 'client@beautyvibe.in',
           mobile: resolvedMobile,
-          avatar: dbUser.avatar || req.user?.avatar || ''
+          avatar: dbUser.avatar || ''
         },
         createdAt: plain.createdAt
       };
@@ -111,7 +107,6 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    // Inspect nested objects where frontend forms frequently store user details
     const bodyCust = req.body.customer || req.body.customerDetails || req.body.user || req.body.client || {};
 
     const { 
@@ -127,7 +122,7 @@ exports.createAppointment = async (req, res) => {
     const finalCategory = category || 'General';
     const finalAmount = Number(amount) || 999;
     
-    // Exhaustive check across flat keys, nested customer objects, and session user
+    // CRITICAL FIX: Capture exact user input from form body keys. NEVER fallback to req.user.phone.
     const finalMobile = (
       req.body.mobileNumber || 
       req.body.phone || 
@@ -146,9 +141,6 @@ exports.createAppointment = async (req, res) => {
       bodyCust.phoneNumber ||
       bodyCust.mobile ||
       bodyCust.contact ||
-      req.user?.phone || 
-      req.user?.mobile || 
-      req.user?.phoneNumber || 
       ''
     ).trim();
 
@@ -156,7 +148,6 @@ exports.createAppointment = async (req, res) => {
       address || 
       doorstepAddress || 
       (typeof req.body.location === 'string' ? req.body.location : req.body.location?.fullAddress) || 
-      req.user?.address || 
       ''
     ).trim();
 
@@ -168,58 +159,11 @@ exports.createAppointment = async (req, res) => {
       derivedName || 
       bodyCust.name ||
       bodyCust.fullName ||
-      req.user?.name || 
-      req.user?.displayName || 
       'Valued Client'
     ).trim();
 
-    // Resolve User ID and update user phone if missing
-    let mysqlUserId = null;
-    try {
-      if (req.user && (req.user.email || req.user.id)) {
-        const email = req.user.email || `user_${req.user.id || Date.now()}@beautyvibe.in`;
-        const userName = req.user.name || req.user.displayName || finalCustomerName;
-        
-        const [userRecord] = await User.findOrCreate({
-          where: { email },
-          defaults: { 
-            name: userName, 
-            role: req.user.role || 'client',
-            phone: finalMobile || req.user?.phone || ''
-          }
-        });
+    const mysqlUserId = req.user?.dbId || req.user?.id || null;
 
-        if (userRecord) {
-          mysqlUserId = userRecord.id;
-          if (finalMobile && !userRecord.phone) {
-            userRecord.phone = finalMobile;
-            await userRecord.save();
-          }
-        }
-      }
-    } catch (userErr) {
-      console.warn("User resolution warning:", userErr.message);
-    }
-
-    if (!mysqlUserId) {
-      try {
-        const [guestUser] = await User.findOrCreate({
-          where: { email: 'guest@beautyvibe.in' },
-          defaults: { name: 'Valued Guest', role: 'client', phone: finalMobile }
-        });
-        if (guestUser) {
-          mysqlUserId = guestUser.id;
-          if (finalMobile && !guestUser.phone) {
-            guestUser.phone = finalMobile;
-            await guestUser.save();
-          }
-        }
-      } catch (e) {
-        mysqlUserId = null;
-      }
-    }
-
-    // Resolve Service ID
     let validServiceId = null;
     try {
       const rawServiceId = Number(serviceId);
@@ -241,7 +185,6 @@ exports.createAppointment = async (req, res) => {
 
     const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
-    // Create appointment and save mobile number in both columns
     const appointmentData = {
       userId: mysqlUserId,
       serviceId: validServiceId || null, 
