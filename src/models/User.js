@@ -1,4 +1,3 @@
-
 const { DataTypes } = require("sequelize");
 const bcrypt = require("bcryptjs");
 const sequelize = require("../config/database");
@@ -83,10 +82,44 @@ const User = sequelize.define(
             ? null
             : String(value).trim();
 
-        this.setDataValue(
-          "phone",
-          normalized || null
-        );
+        this.setDataValue("phone", normalized || null);
+        // Sync secondary fields automatically to prevent schema mismatches
+        this.setDataValue("mobile", normalized || null);
+        this.setDataValue("mobileNumber", normalized || null);
+      },
+    },
+
+    mobile: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: null,
+
+      set(value) {
+        const normalized =
+          value === undefined || value === null
+            ? null
+            : String(value).trim();
+
+        this.setDataValue("mobile", normalized || null);
+        this.setDataValue("phone", normalized || null);
+        this.setDataValue("mobileNumber", normalized || null);
+      },
+    },
+
+    mobileNumber: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: null,
+
+      set(value) {
+        const normalized =
+          value === undefined || value === null
+            ? null
+            : String(value).trim();
+
+        this.setDataValue("mobileNumber", normalized || null);
+        this.setDataValue("phone", normalized || null);
+        this.setDataValue("mobile", normalized || null);
       },
     },
 
@@ -97,7 +130,6 @@ const User = sequelize.define(
     password: {
       type: DataTypes.STRING(255),
       allowNull: true,
-
       // Nullable for Firebase / Google users.
     },
 
@@ -209,6 +241,9 @@ const User = sequelize.define(
         fields: ["phone"],
       },
       {
+        fields: ["mobile"],
+      },
+      {
         fields: ["role"],
       },
     ],
@@ -230,12 +265,10 @@ const User = sequelize.define(
         }
 
         // Automatically construct full name
-        // when firstName and lastName are provided.
         const firstName = user.firstName || "";
         const lastName = user.lastName || "";
 
-        const combinedName =
-          `${firstName} ${lastName}`.trim();
+        const combinedName = `${firstName} ${lastName}`.trim();
 
         if (combinedName) {
           user.name = combinedName;
@@ -245,8 +278,7 @@ const User = sequelize.define(
 
         // Normalize Firebase UID
         if (typeof user.firebaseUid === "string") {
-          user.firebaseUid =
-            user.firebaseUid.trim() || null;
+          user.firebaseUid = user.firebaseUid.trim() || null;
         }
 
         // Normalize avatar
@@ -257,16 +289,9 @@ const User = sequelize.define(
 
       // Hash password only when it is created or changed.
       beforeSave: async (user) => {
-        if (
-          user.changed("password") &&
-          user.password
-        ) {
+        if (user.changed("password") && user.password) {
           const salt = await bcrypt.genSalt(10);
-
-          user.password = await bcrypt.hash(
-            user.password,
-            salt
-          );
+          user.password = await bcrypt.hash(user.password, salt);
         }
       },
     },
@@ -277,20 +302,12 @@ const User = sequelize.define(
 // PASSWORD COMPARISON
 // ============================================
 
-User.prototype.matchPassword = async function (
-  enteredPassword
-) {
-  if (
-    !this.password ||
-    !enteredPassword
-  ) {
+User.prototype.matchPassword = async function (enteredPassword) {
+  if (!this.password || !enteredPassword) {
     return false;
   }
 
-  return bcrypt.compare(
-    String(enteredPassword),
-    this.password
-  );
+  return bcrypt.compare(String(enteredPassword), this.password);
 };
 
 // ============================================
