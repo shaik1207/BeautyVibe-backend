@@ -11,7 +11,8 @@ exports.getUserAppointments = async (req, res) => {
 
     queryOptions.include = [
       { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-      { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+      // Removed 'mobile' from attributes since the users table only uses 'phone'
+      { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
     ];
     queryOptions.order = [['createdAt', 'DESC']];
 
@@ -25,9 +26,6 @@ exports.getUserAppointments = async (req, res) => {
       const resolvedMobile = 
         plain.mobileNumber || 
         dbUser.phone || 
-        dbUser.mobile || 
-        dbUser.phoneNumber || 
-        dbUser.mobileNumber || 
         req.user?.phone || 
         req.user?.mobile || 
         '';
@@ -187,7 +185,6 @@ exports.createAppointment = async (req, res) => {
 
         if (userRecord) {
           mysqlUserId = userRecord.id;
-          // Update user phone if missing and available in request
           if (finalMobile && !userRecord.phone) {
             userRecord.phone = finalMobile;
             await userRecord.save();
@@ -272,7 +269,7 @@ exports.createAppointment = async (req, res) => {
     const fullAppointment = await Appointment.findByPk(appointment.id, {
       include: [
         { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
       ]
     });
 
@@ -320,7 +317,7 @@ exports.updateAppointmentStatus = async (req, res) => {
     const appointment = await Appointment.findByPk(id, {
       include: [
         { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
       ]
     });
 
@@ -349,7 +346,7 @@ exports.assignStaff = async (req, res) => {
     const appointment = await Appointment.findByPk(appId, {
       include: [
         { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
       ]
     });
 
