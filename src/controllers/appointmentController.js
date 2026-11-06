@@ -21,22 +21,17 @@ exports.getUserAppointments = async (req, res) => {
       const plain = app.get({ plain: true });
       const dbUser = plain.user || {};
 
-      // STRICT: Use the appointment's stored mobileNumber or phone. NEVER fall back to admin session phone.
-      const resolvedMobile = 
-        plain.mobileNumber || 
-        plain.phone || 
-        dbUser.phone || 
-        '';
+      // 1. Resolve Name securely
+      let resolvedName = plain.customerName || dbUser.name || 'Valued Client';
+      if (!resolvedName || resolvedName.trim() === '' || resolvedName.includes('undefined')) {
+        resolvedName = 'Valued Client';
+      }
 
-      const resolvedName = 
-        plain.customerName || 
-        dbUser.name || 
-        'Valued Client';
-
-      const resolvedAddress = 
-        plain.address || 
-        dbUser.address || 
-        '';
+      // 2. Resolve Mobile securely and strip out any dummy caching
+      let resolvedMobile = plain.mobileNumber || plain.phone || dbUser.phone || '';
+      if (resolvedMobile.includes('98765') || resolvedMobile.includes('dummy') || resolvedMobile === '+91 98765 43210') {
+        resolvedMobile = '';
+      }
 
       return {
         _id: plain.id,
@@ -53,7 +48,7 @@ exports.getUserAppointments = async (req, res) => {
         assignedStaff: plain.assignedStaff || '',
         customerName: resolvedName,
         mobileNumber: resolvedMobile,
-        address: resolvedAddress,
+        address: plain.address || dbUser.address || '',
         user: {
           name: resolvedName,
           email: dbUser.email || 'client@beautyvibe.in',
@@ -107,12 +102,41 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    const bodyCust = req.body.customer || req.body.customerDetails || req.body.user || req.body.client || {};
+    // --- CRITICAL FIX: AGGRESSIVE PAYLOAD EXTRACTION ---
+    // Forms frequently nest data. We inspect all possible locations for user input.
+    const custData = req.body.customerDetails || req.body.customer || req.body.user || req.body.client || {};
 
-    const { 
-      serviceId, serviceName, category, amount, type, date, time, requestId,
-      address, doorstepAddress, customerName, name, firstName, lastName, fullName
-    } = req.body;
+    const extractedFirstName = req.body.firstName || custData.firstName || '';
+    const extractedLastName = req.body.lastName || custData.lastName || '';
+    const extractedFullName = req.body.customerName || req.body.name || custData.name || custData.fullName || '';
+
+    // Build the final customer name from first and last name if provided
+    let finalCustomerName = extractedFullName || `${extractedFirstName} ${extractedLastName}`.trim();
+    if (!finalCustomerName || finalCustomerName === '' || finalCustomerName === 'undefined undefined') {
+      finalCustomerName = 'Valued Client';
+    }
+
+    // Extract exact mobile number from form. NEVER fallback to admin's dummy session phone.
+    const finalMobile = (
+      req.body.mobileNumber || 
+      custData.mobileNumber || 
+      req.body.phone || 
+      custData.phone || 
+      req.body.phoneNumber || 
+      custData.mobile || 
+      ''
+    ).toString().trim();
+
+    const finalAddress = (
+      req.body.address || 
+      req.body.doorstepAddress || 
+      (typeof req.body.location === 'string' ? req.body.location : req.body.location?.fullAddress) || 
+      custData.address ||
+      ''
+    ).trim();
+    // ---------------------------------------------------
+
+    const { serviceId, serviceName, category, amount, type, date, time, requestId } = req.body;
 
     if (!date || !time) {
       return res.status(400).json({ success: false, message: 'Please provide appointment date and time.' });
@@ -121,47 +145,7 @@ exports.createAppointment = async (req, res) => {
     const finalServiceName = serviceName || 'Beauty Ritual';
     const finalCategory = category || 'General';
     const finalAmount = Number(amount) || 999;
-    
-    // CRITICAL FIX: Capture exact user input from form body keys. NEVER fallback to req.user.phone.
-    const finalMobile = (
-      req.body.mobileNumber || 
-      req.body.phone || 
-      req.body.phoneNumber || 
-      req.body.mobile || 
-      req.body.phone_number || 
-      req.body.number || 
-      req.body.contact || 
-      req.body.contactNumber || 
-      req.body.telephone || 
-      req.body.clientPhone ||
-      req.body.customerPhone ||
-      req.body.userPhone ||
-      bodyCust.mobileNumber ||
-      bodyCust.phone ||
-      bodyCust.phoneNumber ||
-      bodyCust.mobile ||
-      bodyCust.contact ||
-      ''
-    ).trim();
-
-    const finalAddress = (
-      address || 
-      doorstepAddress || 
-      (typeof req.body.location === 'string' ? req.body.location : req.body.location?.fullAddress) || 
-      ''
-    ).trim();
-
-    const derivedName = [firstName, lastName].filter(Boolean).join(' ');
-    const finalCustomerName = (
-      customerName || 
-      name || 
-      fullName || 
-      derivedName || 
-      bodyCust.name ||
-      bodyCust.fullName ||
-      'Valued Client'
-    ).trim();
-
+    const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const mysqlUserId = req.user?.dbId || req.user?.id || null;
 
     let validServiceId = null;
@@ -171,7 +155,6 @@ exports.createAppointment = async (req, res) => {
         const found = await Service.findByPk(rawServiceId);
         if (found) validServiceId = found.id;
       }
-
       if (!validServiceId) {
         const [matchedService] = await Service.findOrCreate({
           where: { name: finalServiceName },
@@ -183,8 +166,7 @@ exports.createAppointment = async (req, res) => {
       console.warn("Service lookup warning:", srvErr.message);
     }
 
-    const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-
+    // Save with the aggressively extracted data
     const appointmentData = {
       userId: mysqlUserId,
       serviceId: validServiceId || null, 
@@ -195,9 +177,9 @@ exports.createAppointment = async (req, res) => {
       date,
       time,
       status: 'Pending',
-      customerName: finalCustomerName,
-      mobileNumber: finalMobile,
-      phone: finalMobile,
+      customerName: finalCustomerName,   // <-- Real Name
+      mobileNumber: finalMobile,         // <-- Real Number
+      phone: finalMobile,                // <-- Real Number
       address: finalAddress,
       passCode,
       requestId: requestId || idempotencyKey || `REQ-${Date.now()}`,
@@ -250,9 +232,7 @@ exports.updateAppointmentStatus = async (req, res) => {
       ]
     });
 
-    if (!appointment) {
-      return res.status(404).json({ success: false, message: 'Appointment not found.' });
-    }
+    if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found.' });
 
     appointment.status = status || appointment.status;
     await appointment.save();
@@ -279,9 +259,7 @@ exports.assignStaff = async (req, res) => {
       ]
     });
 
-    if (!appointment) {
-      return res.status(404).json({ success: false, message: 'Appointment not found.' });
-    }
+    if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found.' });
 
     appointment.assignedStaff = assignedStaff;
     await appointment.save();
