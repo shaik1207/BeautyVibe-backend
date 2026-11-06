@@ -1,3 +1,4 @@
+// controllers/appointmentController.js
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
 const User = require('../models/User');
@@ -11,7 +12,6 @@ exports.getUserAppointments = async (req, res) => {
 
     queryOptions.include = [
       { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-      // Removed 'mobile' from attributes since the users table only uses 'phone'
       { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
     ];
     queryOptions.order = [['createdAt', 'DESC']];
@@ -22,9 +22,10 @@ exports.getUserAppointments = async (req, res) => {
       const plain = app.get({ plain: true });
       const dbUser = plain.user || {};
 
-      // Robust fallback for phone/mobile across appointment and user record
+      // Robust fallback resolution for real customer mobile number
       const resolvedMobile = 
         plain.mobileNumber || 
+        plain.phone || 
         dbUser.phone || 
         req.user?.phone || 
         req.user?.mobile || 
@@ -98,7 +99,6 @@ exports.createAppointment = async (req, res) => {
   try {
     const idempotencyKey = req.headers['idempotency-key'] || req.body.requestId;
 
-    // 1. Idempotency Check
     if (idempotencyKey) {
       const existingRequest = await Appointment.findOne({ where: { requestId: idempotencyKey } });
       if (existingRequest) {
@@ -111,12 +111,12 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    // Exhaustive field extraction from req.body and req.user to ensure mobile/phone is NEVER missed
+    // Inspect nested objects where frontend forms frequently store user details
+    const bodyCust = req.body.customer || req.body.customerDetails || req.body.user || req.body.client || {};
+
     const { 
       serviceId, serviceName, category, amount, type, date, time, requestId,
-      mobileNumber, phone, phoneNumber, mobile, phone_number, number, contact, contactNumber, telephone,
-      address, doorstepAddress, shippingAddress, deliveryAddress,
-      customerName, name, firstName, lastName, fullName
+      address, doorstepAddress, customerName, name, firstName, lastName, fullName
     } = req.body;
 
     if (!date || !time) {
@@ -127,47 +127,53 @@ exports.createAppointment = async (req, res) => {
     const finalCategory = category || 'General';
     const finalAmount = Number(amount) || 999;
     
-    // Robust mobile number resolution across all possible frontend payload keys
+    // Exhaustive check across flat keys, nested customer objects, and session user
     const finalMobile = (
-      mobileNumber || 
-      phone || 
-      phoneNumber || 
-      mobile || 
-      phone_number || 
-      number || 
-      contact || 
-      contactNumber || 
-      telephone || 
+      req.body.mobileNumber || 
+      req.body.phone || 
+      req.body.phoneNumber || 
+      req.body.mobile || 
+      req.body.phone_number || 
+      req.body.number || 
+      req.body.contact || 
+      req.body.contactNumber || 
+      req.body.telephone || 
+      req.body.clientPhone ||
+      req.body.customerPhone ||
+      req.body.userPhone ||
+      bodyCust.mobileNumber ||
+      bodyCust.phone ||
+      bodyCust.phoneNumber ||
+      bodyCust.mobile ||
+      bodyCust.contact ||
       req.user?.phone || 
       req.user?.mobile || 
       req.user?.phoneNumber || 
       ''
     ).trim();
 
-    // Robust address resolution
     const finalAddress = (
       address || 
       doorstepAddress || 
-      shippingAddress || 
-      deliveryAddress || 
       (typeof req.body.location === 'string' ? req.body.location : req.body.location?.fullAddress) || 
       req.user?.address || 
       ''
     ).trim();
 
-    // Robust customer name resolution
     const derivedName = [firstName, lastName].filter(Boolean).join(' ');
     const finalCustomerName = (
       customerName || 
       name || 
       fullName || 
       derivedName || 
+      bodyCust.name ||
+      bodyCust.fullName ||
       req.user?.name || 
       req.user?.displayName || 
       'Valued Client'
     ).trim();
 
-    // 2. Safely resolve User ID and sync phone number
+    // Resolve User ID and update user phone if missing
     let mysqlUserId = null;
     try {
       if (req.user && (req.user.email || req.user.id)) {
@@ -213,7 +219,7 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    // 3. Resolve Service ID cleanly
+    // Resolve Service ID
     let validServiceId = null;
     try {
       const rawServiceId = Number(serviceId);
@@ -225,11 +231,7 @@ exports.createAppointment = async (req, res) => {
       if (!validServiceId) {
         const [matchedService] = await Service.findOrCreate({
           where: { name: finalServiceName },
-          defaults: {
-            category: finalCategory,
-            amount: finalAmount,
-            duration: '30 mins'
-          }
+          defaults: { category: finalCategory, amount: finalAmount, duration: '30 mins' }
         });
         if (matchedService) validServiceId = matchedService.id;
       }
@@ -239,7 +241,7 @@ exports.createAppointment = async (req, res) => {
 
     const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
-    // 4. Create appointment record with phone & address saved
+    // Create appointment and save mobile number in both columns
     const appointmentData = {
       userId: mysqlUserId,
       serviceId: validServiceId || null, 
@@ -252,6 +254,7 @@ exports.createAppointment = async (req, res) => {
       status: 'Pending',
       customerName: finalCustomerName,
       mobileNumber: finalMobile,
+      phone: finalMobile,
       address: finalAddress,
       passCode,
       requestId: requestId || idempotencyKey || `REQ-${Date.now()}`,
@@ -265,7 +268,6 @@ exports.createAppointment = async (req, res) => {
       appointment = await Appointment.create(appointmentData);
     }
 
-    // Fetch complete appointment with associations to emit via Socket
     const fullAppointment = await Appointment.findByPk(appointment.id, {
       include: [
         { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
@@ -285,22 +287,6 @@ exports.createAppointment = async (req, res) => {
     });
   } catch (error) {
     console.error("Create Appointment Critical Error:", error);
-
-    if (error.name === 'SequelizeUniqueConstraintError' || error.code === 'ER_DUP_ENTRY' || error.code === '1062') {
-      const duplicateRequestId = req.body.requestId || req.headers['idempotency-key'];
-      if (duplicateRequestId) {
-        const existing = await Appointment.findOne({ where: { requestId: duplicateRequestId } });
-        if (existing) {
-          return res.status(200).json({
-            success: true,
-            duplicateRequest: true,
-            message: 'Appointment recovered successfully.',
-            data: existing
-          });
-        }
-      }
-    }
-
     return res.status(500).json({ 
       success: false, 
       message: error.message || 'Unable to create appointment.', 
