@@ -16,7 +16,7 @@ const cleanString = (value) => {
     return "";
   }
 
-  // Reject email addresses from being treated as names
+  // Reject email addresses from being treated as names or phones
   if (result.includes("@") && result.includes(".")) {
     return "";
   }
@@ -108,17 +108,20 @@ const extractCustomerInfo = (body = {}, linkedUser = null) => {
 
   const customerName = cleanString(rawCandidateName) || "Valued Client";
 
+  // Comprehensive fallback for mobile numbers across all payloads
   const mobileNumber = firstRealValue(
     body.mobileNumber,
     body.phoneNumber,
     body.phone,
     body.mobile,
     body.contact,
+    body.customerPhone,
     customer.mobileNumber,
     customer.phoneNumber,
     customer.phone,
     customer.mobile,
     customer.contact,
+    customer.customerPhone,
     linkedUser?.phone,
     linkedUser?.mobileNumber,
     linkedUser?.mobile
@@ -148,7 +151,7 @@ const appointmentIncludes = () => [
   {
     model: User,
     as: "user",
-    attributes: ["id", "firstName", "lastName", "name", "email", "phone", "avatar", "addresses"],
+    attributes: ["id", "firstName", "lastName", "name", "email", "phone", "mobile", "mobileNumber", "avatar", "addresses"],
     required: false,
   },
 ];
@@ -395,7 +398,7 @@ exports.assignStaff = async (req, res) => {
       data: updatedAppointment || appointment,
     });
   } catch (error) {
-    console.error("[BeautyVibe] Express assign staff error:", error);
+    console.error("[BeautyVibe] Assign staff error:", error);
     return res.status(500).json({ success: false, message: "Unable to assign staff." });
   }
 };
