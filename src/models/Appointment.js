@@ -1,97 +1,183 @@
-const clean = (value) => {
-  if (value === null || value === undefined) return "";
-  if (typeof value !== "string" && typeof value !== "number") return "";
+const { DataTypes } = require("sequelize");
+const sequelize = require("../config/database");
 
-  const result = String(value).trim();
-  if (!result) return "";
+const User = require("./User");
+const Service = require("./Service");
 
-  const lower = result.toLowerCase();
+// ============================================
+// APPOINTMENT MODEL
+// ============================================
 
-  // Exclude placeholder or invalid string patterns
-  if (/^(null|undefined|n\/a|na|undefined undefined|null null|valued client|walk-in client)$/.test(lower)) {
-    return "";
+const Appointment = sequelize.define(
+  "Appointment",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    serviceId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    firstName: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      defaultValue: "",
+    },
+    lastName: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      defaultValue: "",
+    },
+    customerName: {
+      type: DataTypes.STRING(150),
+      allowNull: true,
+      defaultValue: "Valued Client",
+    },
+    mobileNumber: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: "",
+    },
+    phone: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: "",
+    },
+    address: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: "",
+    },
+    serviceName: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      defaultValue: "Beauty Ritual",
+    },
+    category: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      defaultValue: "General",
+    },
+    amount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      validate: {
+        min: 0,
+      },
+    },
+    type: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      defaultValue: "SALON",
+    },
+    date: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      defaultValue: "",
+    },
+    time: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      defaultValue: "",
+    },
+    status: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      defaultValue: "Pending",
+    },
+    assignedStaff: {
+      type: DataTypes.STRING(150),
+      allowNull: false,
+      defaultValue: "",
+    },
+    requestId: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true,
+    },
+    passCode: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: "",
+    },
+  },
+  {
+    tableName: "appointments",
+    timestamps: true,
+    indexes: [
+      { fields: ["userId"] },
+      { fields: ["serviceId"] },
+      { fields: ["date"] },
+      { fields: ["status"] },
+    ],
+    hooks: {
+      beforeValidate: (appointment) => {
+        if (typeof appointment.firstName === "string") {
+          appointment.firstName = appointment.firstName.trim();
+        }
+        if (typeof appointment.lastName === "string") {
+          appointment.lastName = appointment.lastName.trim();
+        }
+
+        const combinedName = [appointment.firstName, appointment.lastName].filter(Boolean).join(" ");
+        if (combinedName) {
+          appointment.customerName = combinedName;
+        } else if (typeof appointment.customerName === "string") {
+          const cleanName = appointment.customerName.trim();
+          if (cleanName && !cleanName.includes("@")) {
+            appointment.customerName = cleanName;
+          } else {
+            appointment.customerName = "Valued Client";
+          }
+        }
+
+        if (typeof appointment.mobileNumber === "string") {
+          appointment.mobileNumber = appointment.mobileNumber.trim();
+        }
+        if (typeof appointment.phone === "string") {
+          appointment.phone = appointment.phone.trim();
+        }
+
+        if (!appointment.mobileNumber && appointment.phone) {
+          appointment.mobileNumber = appointment.phone;
+        }
+        if (!appointment.phone && appointment.mobileNumber) {
+          appointment.phone = appointment.mobileNumber;
+        }
+      },
+    },
   }
+);
 
-  // ABSOLUTELY EXCLUDE emails from being returned as customer names
-  if (result.includes("@") && result.includes(".")) {
-    return "";
-  }
+Appointment.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+  constraints: false,
+});
 
-  if (
-    result.includes("9876543210") ||
-    result === "+91 98765 43210" ||
-    result === "98765 43210"
-  ) {
-    return "";
-  }
+User.hasMany(Appointment, {
+  foreignKey: "userId",
+  as: "appointments",
+  constraints: false,
+});
 
-  return result;
-};
+Appointment.belongsTo(Service, {
+  foreignKey: "serviceId",
+  as: "service",
+  constraints: false,
+});
 
-function getCustomerDetails(item) {
-  const user = isObject(item.user) ? item.user : {};
-  const customer = isObject(item.customer) ? item.customer : {};
-  const details = isObject(item.customerDetails) ? item.customerDetails : {};
+Service.hasMany(Appointment, {
+  foreignKey: "serviceId",
+  as: "appointments",
+  constraints: false,
+});
 
-  // Extract explicit First & Last Name
-  const firstName = firstValue(
-    item.firstName,
-    details.firstName,
-    user.firstName,
-    customer.firstName
-  );
-
-  const lastName = firstValue(
-    item.lastName,
-    details.lastName,
-    user.lastName,
-    customer.lastName
-  );
-
-  const combinedName = [firstName, lastName].filter(Boolean).join(" ").trim();
-
-  // Extract Name strictly avoiding email strings
-  const fullName = firstValue(
-    combinedName,
-    item.customerName,
-    item.userName,
-    item.name,
-    item.fullName,
-    details.name,
-    details.fullName,
-    customer.name,
-    customer.fullName,
-    user.name,
-    user.fullName
-  ) || "Valued Client";
-
-  // Extract Mobile Phone with max field fallbacks
-  const mobile = firstValue(
-    item.mobileNumber,
-    item.phone,
-    item.phoneNumber,
-    item.mobile,
-    item.contact,
-    details.mobileNumber,
-    details.phone,
-    details.mobile,
-    details.contact,
-    customer.mobileNumber,
-    customer.phone,
-    customer.mobile,
-    user.phone,
-    user.mobileNumber,
-    user.mobile
-  );
-
-  const address = getUserAddress(user, item);
-
-  return {
-    firstName,
-    lastName,
-    name: fullName,
-    mobile,
-    address,
-    avatar: firstValue(item.avatar, user.avatar, customer.avatar),
-  };
-}
+module.exports = Appointment;

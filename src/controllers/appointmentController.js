@@ -4,11 +4,6 @@ const User = require("../models/User");
 const { Op, UniqueConstraintError } = require("sequelize");
 const { randomUUID } = require("crypto");
 
-// ============================================
-// STRICT UTILITIES & HELPERS
-// ============================================
-
-// Rejects empty values, null strings, AND email addresses from being treated as names
 const cleanString = (value) => {
   if (value === null || value === undefined) return "";
   if (typeof value !== "string" && typeof value !== "number") return "";
@@ -17,13 +12,11 @@ const cleanString = (value) => {
   if (!result) return "";
 
   const lower = result.toLowerCase();
-
-  // Destroy null/undefined string literals
   if (/^(null|undefined|n\/a|na|undefined undefined|null null|valued client|walk-in client)$/.test(lower)) {
     return "";
   }
 
-  // STRICTLY destroy email addresses from being treated as human names
+  // Reject email addresses from being treated as names
   if (result.includes("@") && result.includes(".")) {
     return "";
   }
@@ -44,17 +37,6 @@ const resolveAddress = (value) => {
   if (typeof value === "string") return cleanString(value);
   if (Array.isArray(value)) return value.map(resolveAddress).filter(Boolean).join(", ");
   if (typeof value !== "object") return "";
-
-  const directAddress = firstRealValue(
-    value.fullAddress,
-    value.doorstepAddress,
-    value.serviceAddress,
-    value.customerAddress,
-    value.formattedAddress,
-    value.address,
-    value.location
-  );
-  if (directAddress) return directAddress;
 
   return [
     value.houseNo,
@@ -94,11 +76,9 @@ const resolveUserAddress = (user) => {
   return resolveAddress(user.address);
 };
 
-// Extracts first name, last name, clean customer name (no emails), mobile, and address
 const extractCustomerInfo = (body = {}, linkedUser = null) => {
   const customer = body.customerDetails || body.customer || body.user || body.client || {};
 
-  // 1. Resolve First and Last Name strictly
   const firstName = firstRealValue(
     body.firstName,
     customer.firstName,
@@ -115,7 +95,6 @@ const extractCustomerInfo = (body = {}, linkedUser = null) => {
 
   const combinedFirstLast = [firstName, lastName].filter(Boolean).join(" ");
 
-  // 2. Resolve Full Name without accepting any emails
   const rawCandidateName = firstRealValue(
     combinedFirstLast,
     body.customerName,
@@ -127,10 +106,8 @@ const extractCustomerInfo = (body = {}, linkedUser = null) => {
     linkedUser?.name
   );
 
-  // Fall back to "Valued Client" if the only stored string was an email address
   const customerName = cleanString(rawCandidateName) || "Valued Client";
 
-  // 3. Resolve Mobile Phone with multi-field fallback
   const mobileNumber = firstRealValue(
     body.mobileNumber,
     body.phoneNumber,
@@ -147,7 +124,6 @@ const extractCustomerInfo = (body = {}, linkedUser = null) => {
     linkedUser?.mobile
   );
 
-  // 4. Resolve Address
   const address = firstRealValue(
     resolveAddress(body.address),
     resolveAddress(body.doorstepAddress),
@@ -199,7 +175,6 @@ exports.getUserAppointments = async (req, res) => {
     const formattedAppointments = appointments.map((appointment) => {
       const plain = appointment.get({ plain: true });
       const user = plain.user || {};
-
       const info = extractCustomerInfo(plain, user);
 
       return {
@@ -245,7 +220,7 @@ exports.getUserAppointments = async (req, res) => {
     });
   } catch (error) {
     console.error("[BeautyVibe] Get appointments error:", error);
-    return res.status(500).json({ success: false, message: "Unable to retrieve appointments." });
+    return res.status(500).json({ success: false, message: error.message || "Unable to retrieve appointments." });
   }
 };
 
@@ -356,7 +331,7 @@ exports.createAppointment = async (req, res) => {
     if (error instanceof UniqueConstraintError) {
       return res.status(409).json({ success: false, message: "Booking request already processed." });
     }
-    return res.status(500).json({ success: false, message: "Unable to create appointment." });
+    return res.status(500).json({ success: false, message: error.message || "Unable to create appointment." });
   }
 };
 
@@ -420,7 +395,7 @@ exports.assignStaff = async (req, res) => {
       data: updatedAppointment || appointment,
     });
   } catch (error) {
-    console.error("[BeautyVibe] Assign staff error:", error);
+    console.error("[BeautyVibe] Express assign staff error:", error);
     return res.status(500).json({ success: false, message: "Unable to assign staff." });
   }
 };

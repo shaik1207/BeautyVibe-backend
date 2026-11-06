@@ -8,6 +8,7 @@ if (process.env.NODE_ENV !== "production") {
 
 const http = require("http");
 const { Server } = require("socket.io");
+const cors = require("cors");
 
 const app = require("./app");
 const sequelize = require("./config/database");
@@ -36,21 +37,41 @@ const allowedOrigins = [
   "https://www.beautyvibes.in",
 ];
 
+// Helper to check if an origin is permitted (supports exact matches & Vercel subdomains)
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  const cleanOrigin = origin.replace(/\/+$/, "");
+  const isVercelSubdomain = /\.vercel\.app$/i.test(cleanOrigin);
+  const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
+  return isExplicitlyAllowed || isVercelSubdomain;
+};
+
+// Configure Express CORS middleware globally to prevent API CORS blocks
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`[Express CORS Blocked] Unrecognized origin: "${origin}"`);
+        callback(new Error("Origin not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
+  })
+);
+
 // Share allowedOrigins with Express app if needed
 app.set("allowedOrigins", allowedOrigins);
 
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const cleanOrigin = origin.replace(/\/+$/, "");
-      const isVercelSubdomain = /\.vercel\.app$/i.test(cleanOrigin);
-      const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
-
-      if (isExplicitlyAllowed || isVercelSubdomain) {
+      if (isOriginAllowed(origin)) {
         return callback(null, true);
       }
-
       console.warn(`[Socket.io CORS Blocked] Unrecognized origin: "${origin}"`);
       return callback(new Error("Origin not allowed by CORS"));
     },
@@ -123,8 +144,8 @@ async function startServer() {
   await sequelize.authenticate();
   console.log(`[BeautyVibe DB] MySQL connected (${process.env.NODE_ENV === 'production' ? 'Aiven Cloud' : 'Localhost'})`);
 
-  // Use alter: { drop: false } so new columns (customerName, mobileNumber, address) are safely added to MySQL without dropping tables or data
-  await sequelize.sync({ alter: { drop: false } });  
+  // Safely synchronize models and schema columns without dropping tables
+  await sequelize.sync({ alter: true });  
   console.log("[BeautyVibe DB] Models and schema synchronized successfully");
 
   await new Promise((resolve, reject) => {
