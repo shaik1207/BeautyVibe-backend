@@ -36,7 +36,7 @@ const registerUser = async (req, res) => {
       name: name || normalizedEmail.split('@')[0],
       email: normalizedEmail,
       password,
-      phone: phone || '+91 98765 43210',
+      phone: phone || null,
       role: role || 'user',
       authProvider: 'local'
     });
@@ -56,7 +56,7 @@ const registerUser = async (req, res) => {
 // 2. Google Auth / Register Handler
 const googleAuth = async (req, res) => {
   try {
-    const { name, email, phone, idToken } = req.body;
+    const { name, email, phone, token, idToken, firebaseUid, avatar } = req.body;
 
     if (!email) {
       return res.status(400).json({ success: false, message: 'Email is required from Google.' });
@@ -66,21 +66,41 @@ const googleAuth = async (req, res) => {
     let user = await User.findOne({ where: { email: normalizedEmail } });
 
     if (!user) {
+      // Create new user for Google sign-in
       user = await User.create({
         name: name || normalizedEmail.split('@')[0],
         email: normalizedEmail,
         password: null, // Google users do not require passwords
-        phone: phone || '+91 98765 43210',
+        phone: phone || null,
         role: 'user',
         authProvider: 'google',
-        firebaseUid: idToken ? 'verified_firebase_user' : null,
+        firebaseUid: firebaseUid || null, // Unique Firebase UID or null (MySQL allows multiple nulls)
+        avatar: avatar || null,
       });
+    } else {
+      // Update existing user's provider / details if logging in via Google
+      let isUpdated = false;
+      if (user.authProvider !== 'google') {
+        user.authProvider = 'google';
+        isUpdated = true;
+      }
+      if (firebaseUid && !user.firebaseUid) {
+        user.firebaseUid = firebaseUid;
+        isUpdated = true;
+      }
+      if (avatar && !user.avatar) {
+        user.avatar = avatar;
+        isUpdated = true;
+      }
+      if (isUpdated) {
+        await user.save();
+      }
     }
 
-    const token = generateToken(user.id);
+    const jwtToken = generateToken(user.id);
     return res.status(200).json({
       success: true,
-      token,
+      token: jwtToken,
       data: sanitizeUser(user),
     });
   } catch (error) {
