@@ -1,275 +1,453 @@
-const Appointment = require('../models/Appointment');
-const Service = require('../models/Service');
-const User = require('../models/User');
-const { Op } = require('sequelize');
+const Appointment = require("../models/Appointment");
+const Service = require("../models/Service");
+const User = require("../models/User");
+
+const { Op, UniqueConstraintError } = require("sequelize");
+const { randomUUID } = require("crypto");
+
+// ============================================
+// STRICT UTILITIES & HELPERS
+// ============================================
+
+// PERMANENT FIX: Scrub nested dummy values and stringified undefined/nulls
+const cleanValue = (value) => {
+  if (value === null || value === undefined) return "";
+
+  if (typeof value !== "string" && typeof value !== "number") {
+    return "";
+  }
+
+  const result = String(value).trim();
+  if (!result) return "";
+
+  const lower = result.toLowerCase();
+
+  // 1. Destroy exact and combined undefined/null bugs
+  if (/^(null|undefined|n\/a|na|undefined undefined|null null)$/.test(lower)) {
+    return "";
+  }
+
+  // 2. Destroy admin dummy session phone numbers unconditionally
+  if (
+    result.includes("98765") ||
+    lower.includes("dummy") ||
+    result === "+91 98765 43210" ||
+    result === "9876543210"
+  ) {
+    return "";
+  }
+
+  return result;
+};
+
+const firstRealValue = (...values) => {
+  for (const value of values) {
+    const result = cleanValue(value);
+    if (result) return result;
+  }
+  return "";
+};
+
+const resolveAddress = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return cleanValue(value);
+
+  if (Array.isArray(value)) {
+    return value.map(resolveAddress).filter(Boolean).join(", ");
+  }
+
+  if (typeof value !== "object") return "";
+
+  const directAddress = firstRealValue(
+    value.fullAddress,
+    value.formattedAddress,
+    value.address,
+    value.location
+  );
+
+  if (directAddress) return directAddress;
+
+  return [
+    value.houseNo,
+    value.flatNumber,
+    value.building,
+    value.apartment,
+    value.street,
+    value.area,
+    value.landmark,
+    value.city,
+    value.district,
+    value.state,
+    value.postalCode,
+    value.pincode,
+  ]
+    .map(cleanValue)
+    .filter(Boolean)
+    .join(", ");
+};
+
+const resolveUserAddress = (user) => {
+  if (!user) return "";
+  const addresses = user.addresses;
+
+  if (Array.isArray(addresses)) {
+    const selected =
+      addresses.find(
+        (address) =>
+          address?.isDefault === true ||
+          address?.default === true ||
+          address?.isDefault === 1
+      ) || addresses[0];
+    return resolveAddress(selected);
+  }
+
+  if (addresses && typeof addresses === "object") {
+    return resolveAddress(
+      addresses.defaultAddress ||
+      addresses.selectedAddress ||
+      addresses
+    );
+  }
+
+  return resolveAddress(user.address);
+};
+
+const getCustomerDetails = (body = {}) => {
+  const customer = body.customerDetails || body.customer || body.user || body.client || {};
+
+  const firstName = firstRealValue(body.firstName, customer.firstName);
+  const lastName = firstRealValue(body.lastName, customer.lastName);
+  const combinedName = [firstName, lastName].filter(Boolean).join(" ");
+
+  const customerName = firstRealValue(
+    body.customerName,
+    body.name,
+    customer.customerName,
+    customer.fullName,
+    customer.name,
+    combinedName
+  ) || "Valued Client";
+
+  const mobileNumber = firstRealValue(
+    body.mobileNumber,
+    body.phoneNumber,
+    body.phone,
+    body.mobile,
+    customer.mobileNumber,
+    customer.phoneNumber,
+    customer.phone,
+    customer.mobile
+  );
+
+  const address = firstRealValue(
+    body.address,
+    body.doorstepAddress,
+    body.fullAddress,
+    typeof body.location === "string" ? body.location : body.location?.fullAddress,
+    customer.address,
+    customer.fullAddress
+  );
+
+  return { customerName, mobileNumber, address };
+};
+
+const appointmentIncludes = () => [
+  {
+    model: Service,
+    as: "service",
+    attributes: ["id", "name", "category", "duration", "image", "price"],
+    required: false,
+  },
+  {
+    model: User,
+    as: "user",
+    attributes: ["id", "firstName", "lastName", "name", "email", "phone", "avatar", "addresses"],
+    required: false,
+  },
+];
+
+// ============================================
+// GET USER APPOINTMENTS
+// ============================================
 
 exports.getUserAppointments = async (req, res) => {
   try {
-    const userId = req.user?.dbId || req.user?.id;
-    const isAdmin = req.user?.role === 'admin';
-    const queryOptions = isAdmin ? {} : (userId ? { where: { userId } } : {});
+    const userId = Number(req.user?.dbId || req.user?.id);
+    const role = String(req.user?.role || "").toLowerCase();
+    const isAdmin = role === "admin" || role === "superadmin";
 
-    queryOptions.include = [
-      { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-      { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
-    ];
-    queryOptions.order = [['createdAt', 'DESC']];
+    if (!isAdmin && (!Number.isInteger(userId) || userId <= 0)) {
+      return res.status(401).json({ success: false, message: "Authentication required." });
+    }
 
-    const appointments = await Appointment.findAll(queryOptions);
+    const appointments = await Appointment.findAll({
+      where: isAdmin ? {} : { userId },
+      include: appointmentIncludes(),
+      order: [["createdAt", "DESC"]],
+    });
 
-    const formatted = appointments.map(app => {
-      const plain = app.get({ plain: true });
-      const dbUser = plain.user || {};
+    const formattedAppointments = appointments.map((appointment) => {
+      const plain = appointment.get({ plain: true });
+      const user = plain.user || {};
 
-      // 1. Resolve Name securely
-      let resolvedName = plain.customerName || dbUser.name || 'Valued Client';
-      if (!resolvedName || resolvedName.trim() === '' || resolvedName.includes('undefined')) {
-        resolvedName = 'Valued Client';
-      }
+      const profileName = [cleanValue(user.firstName), cleanValue(user.lastName)]
+        .filter(Boolean)
+        .join(" ");
 
-      // 2. Resolve Mobile securely and strip out any dummy caching
-      let resolvedMobile = plain.mobileNumber || plain.phone || dbUser.phone || '';
-      if (resolvedMobile.includes('98765') || resolvedMobile.includes('dummy') || resolvedMobile === '+91 98765 43210') {
-        resolvedMobile = '';
-      }
+      const customerName = firstRealValue(
+        plain.customerName,
+        profileName,
+        user.name
+      ) || "Valued Client";
+
+      const mobileNumber = firstRealValue(
+        plain.mobileNumber,
+        plain.phone,
+        user.phone
+      );
+
+      const address = firstRealValue(
+        resolveAddress(plain.address),
+        resolveAddress(plain.doorstepAddress),
+        resolveUserAddress(user)
+      );
 
       return {
+        ...plain,
         _id: plain.id,
         id: plain.id,
+        customerName,
+        mobileNumber,
+        phone: mobileNumber,
+        address,
+        serviceName: firstRealValue(plain.service?.name, plain.serviceName) || "Beauty Ritual",
+        category: firstRealValue(plain.service?.category, plain.category) || "General",
+        amount: Number(plain.amount || 0),
         passCode: plain.passCode || `PASS-${plain.id}`,
         requestId: plain.requestId || `REQ-${plain.id}`,
-        serviceName: plain.service?.name || plain.serviceName || 'Beauty Ritual',
-        category: plain.service?.category || plain.category || 'General',
-        amount: plain.amount || 999,
-        type: plain.type || 'HOME',
-        date: plain.date,
-        time: plain.time,
-        status: plain.status || 'Pending',
-        assignedStaff: plain.assignedStaff || '',
-        customerName: resolvedName,
-        mobileNumber: resolvedMobile,
-        address: plain.address || dbUser.address || '',
+        status: plain.status || "Pending",
+        assignedStaff: plain.assignedStaff || "",
         user: {
-          name: resolvedName,
-          email: dbUser.email || 'client@beautyvibe.in',
-          mobile: resolvedMobile,
-          avatar: dbUser.avatar || ''
+          id: user.id || plain.userId || null,
+          firstName: cleanValue(user.firstName),
+          lastName: cleanValue(user.lastName),
+          name: customerName,
+          email: cleanValue(user.email),
+          phone: mobileNumber,
+          mobile: mobileNumber,
+          avatar: cleanValue(user.avatar),
+          addresses: user.addresses || [],
         },
-        createdAt: plain.createdAt
       };
     });
 
-    return res.status(200).json({ success: true, data: formatted });
+    return res.status(200).json({
+      success: true,
+      count: formattedAppointments.length,
+      data: formattedAppointments,
+    });
   } catch (error) {
-    console.error("Get Appointments Error:", error);
-    return res.status(200).json({ success: true, data: [] });
+    console.error("[BeautyVibe] Get appointments error:", error);
+    return res.status(500).json({ success: false, message: "Unable to retrieve appointments." });
   }
 };
+
+// ============================================
+// GET BOOKED SLOTS
+// ============================================
 
 exports.getBookedSlots = async (req, res) => {
   try {
     const { date } = req.query;
+
     if (!date) {
-      return res.status(200).json({ success: true, data: [] });
+      return res.status(400).json({ success: false, message: "Appointment date is required." });
     }
 
     const bookedAppointments = await Appointment.findAll({
-      where: { date, status: { [Op.ne]: 'Cancelled' } },
-      attributes: ['time', 'date']
+      where: {
+        date,
+        status: { [Op.notIn]: ["Cancelled", "Rejected"] },
+      },
+      attributes: ["time", "date"],
     });
 
-    const bookedSlots = bookedAppointments.map(app => app.time);
+    const bookedSlots = bookedAppointments.map((app) => app.time);
     return res.status(200).json({ success: true, data: bookedSlots });
   } catch (error) {
-    console.error("Get Booked Slots Error:", error);
-    return res.status(200).json({ success: true, data: [] });
+    console.error("[BeautyVibe] Get booked slots error:", error);
+    return res.status(500).json({ success: false, message: "Unable to retrieve booked slots." });
   }
 };
 
+// ============================================
+// CREATE APPOINTMENT
+// ============================================
+
 exports.createAppointment = async (req, res) => {
   try {
-    const idempotencyKey = req.headers['idempotency-key'] || req.body.requestId;
+    const body = req.body || {};
+    const idempotencyKey = cleanValue(req.headers["idempotency-key"] || body.requestId);
 
     if (idempotencyKey) {
-      const existingRequest = await Appointment.findOne({ where: { requestId: idempotencyKey } });
-      if (existingRequest) {
+      const existingAppointment = await Appointment.findOne({
+        where: { requestId: idempotencyKey },
+        include: appointmentIncludes(),
+      });
+
+      if (existingAppointment) {
         return res.status(200).json({
           success: true,
           duplicateRequest: true,
-          message: 'Appointment already processed.',
-          data: existingRequest
+          message: "Appointment already processed.",
+          data: existingAppointment, // Can be formatted here if needed
         });
       }
     }
 
-    // --- CRITICAL FIX: AGGRESSIVE PAYLOAD EXTRACTION ---
-    // Forms frequently nest data. We inspect all possible locations for user input.
-    const custData = req.body.customerDetails || req.body.customer || req.body.user || req.body.client || {};
+    const customerDetails = getCustomerDetails(body);
+    const mysqlUserId = Number(req.user?.dbId || req.user?.id) || null;
+    let linkedUser = null;
 
-    const extractedFirstName = req.body.firstName || custData.firstName || '';
-    const extractedLastName = req.body.lastName || custData.lastName || '';
-    const extractedFullName = req.body.customerName || req.body.name || custData.name || custData.fullName || '';
-
-    // Build the final customer name from first and last name if provided
-    let finalCustomerName = extractedFullName || `${extractedFirstName} ${extractedLastName}`.trim();
-    if (!finalCustomerName || finalCustomerName === '' || finalCustomerName === 'undefined undefined') {
-      finalCustomerName = 'Valued Client';
+    if (mysqlUserId) {
+      linkedUser = await User.findByPk(mysqlUserId);
     }
 
-    // Extract exact mobile number from form. NEVER fallback to admin's dummy session phone.
-    const finalMobile = (
-      req.body.mobileNumber || 
-      custData.mobileNumber || 
-      req.body.phone || 
-      custData.phone || 
-      req.body.phoneNumber || 
-      custData.mobile || 
-      ''
-    ).toString().trim();
+    const finalCustomerName = firstRealValue(
+      customerDetails.customerName,
+      linkedUser?.name
+    ) || "Valued Client";
 
-    const finalAddress = (
-      req.body.address || 
-      req.body.doorstepAddress || 
-      (typeof req.body.location === 'string' ? req.body.location : req.body.location?.fullAddress) || 
-      custData.address ||
-      ''
-    ).trim();
-    // ---------------------------------------------------
+    const finalMobile = firstRealValue(
+      customerDetails.mobileNumber,
+      linkedUser?.phone
+    );
 
-    const { serviceId, serviceName, category, amount, type, date, time, requestId } = req.body;
+    const finalAddress = firstRealValue(customerDetails.address);
+    const { date, time } = body;
 
     if (!date || !time) {
-      return res.status(400).json({ success: false, message: 'Please provide appointment date and time.' });
+      return res.status(400).json({ success: false, message: "Please provide appointment date and time." });
     }
 
-    const finalServiceName = serviceName || 'Beauty Ritual';
-    const finalCategory = category || 'General';
-    const finalAmount = Number(amount) || 999;
-    const passCode = `PASS-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    const mysqlUserId = req.user?.dbId || req.user?.id || null;
+    const serviceId = Number(body.serviceId);
+    let service = null;
 
-    let validServiceId = null;
-    try {
-      const rawServiceId = Number(serviceId);
-      if (!isNaN(rawServiceId) && rawServiceId > 0) {
-        const found = await Service.findByPk(rawServiceId);
-        if (found) validServiceId = found.id;
-      }
-      if (!validServiceId) {
-        const [matchedService] = await Service.findOrCreate({
-          where: { name: finalServiceName },
-          defaults: { category: finalCategory, amount: finalAmount, duration: '30 mins' }
-        });
-        if (matchedService) validServiceId = matchedService.id;
-      }
-    } catch (srvErr) {
-      console.warn("Service lookup warning:", srvErr.message);
+    if (Number.isInteger(serviceId) && serviceId > 0) {
+      service = await Service.findByPk(serviceId);
     }
 
-    // Save with the aggressively extracted data
+    const finalServiceName = cleanValue(service?.name || body.serviceName) || "Beauty Ritual";
+    const finalCategory = cleanValue(service?.category || body.category) || "General";
+    const finalAmount = Number(service ? service.price : body.amount) || 999;
+    const finalType = cleanValue(body.type).toUpperCase() === "SALON" ? "SALON" : "HOME";
+
     const appointmentData = {
       userId: mysqlUserId,
-      serviceId: validServiceId || null, 
+      serviceId: service?.id || null,
+      customerName: finalCustomerName,
+      mobileNumber: finalMobile,
+      phone: finalMobile,
+      address: finalAddress,
       serviceName: finalServiceName,
       category: finalCategory,
       amount: finalAmount,
-      type: type || 'HOME',
-      date,
-      time,
-      status: 'Pending',
-      customerName: finalCustomerName,   // <-- Real Name
-      mobileNumber: finalMobile,         // <-- Real Number
-      phone: finalMobile,                // <-- Real Number
-      address: finalAddress,
-      passCode,
-      requestId: requestId || idempotencyKey || `REQ-${Date.now()}`,
+      type: finalType,
+      date: cleanValue(date),
+      time: cleanValue(time),
+      status: "Pending",
+      requestId: idempotencyKey || randomUUID(),
+      passCode: `PASS-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`,
     };
 
-    let appointment;
-    try {
-      appointment = await Appointment.create(appointmentData);
-    } catch (dbErr) {
-      appointmentData.serviceId = null;
-      appointment = await Appointment.create(appointmentData);
-    }
-
+    const appointment = await Appointment.create(appointmentData);
     const fullAppointment = await Appointment.findByPk(appointment.id, {
-      include: [
-        { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
-      ]
+      include: appointmentIncludes(),
     });
 
-    const io = req.app.get('io');
+    const responseAppointment = fullAppointment || appointment;
+    const io = req.app.get("io");
     if (io) {
-      io.emit('newAppointment', fullAppointment || appointment);
+      io.emit("newAppointment", responseAppointment);
     }
 
     return res.status(201).json({
       success: true,
-      message: 'Appointment booked successfully.',
-      data: fullAppointment || appointment
+      message: "Appointment booked successfully.",
+      data: responseAppointment,
     });
   } catch (error) {
-    console.error("Create Appointment Critical Error:", error);
-    return res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Unable to create appointment.', 
-      code: error.code || 'INTERNAL_ERROR'
-    });
+    console.error("[BeautyVibe] Create appointment error:", error);
+    if (error instanceof UniqueConstraintError) {
+      return res.status(409).json({ success: false, message: "Booking request already processed." });
+    }
+    return res.status(500).json({ success: false, message: "Unable to create appointment." });
   }
 };
+
+// ============================================
+// UPDATE APPOINTMENT STATUS
+// ============================================
 
 exports.updateAppointmentStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status } = req.body || {};
+    const allowedStatuses = ["Pending", "Accepted", "Completed", "Rejected", "Cancelled"];
 
-    const appointment = await Appointment.findByPk(id, {
-      include: [
-        { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
-      ]
-    });
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid appointment status." });
+    }
 
-    if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    const appointment = await Appointment.findByPk(id);
+    if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
 
-    appointment.status = status || appointment.status;
+    appointment.status = status;
     await appointment.save();
 
-    const io = req.app.get('io');
-    if (io) io.emit('appointmentUpdated', appointment);
+    const updatedAppointment = await Appointment.findByPk(id, { include: appointmentIncludes() });
+    const io = req.app.get("io");
+    if (io) io.emit("appointmentUpdated", updatedAppointment || appointment);
 
-    return res.status(200).json({ success: true, message: 'Status updated successfully.', data: appointment });
+    return res.status(200).json({
+      success: true,
+      message: "Appointment status updated successfully.",
+      data: updatedAppointment || appointment,
+    });
   } catch (error) {
-    console.error("Update Status Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
+    console.error("[BeautyVibe] Update status error:", error);
+    return res.status(500).json({ success: false, message: "Unable to update status." });
   }
 };
 
+// ============================================
+// ASSIGN STAFF
+// ============================================
+
 exports.assignStaff = async (req, res) => {
   try {
-    const { id: appId } = req.params;
-    const { assignedStaff } = req.body;
+    const { id } = req.params;
+    const assignedStaff = cleanValue(req.body?.assignedStaff);
 
-    const appointment = await Appointment.findByPk(appId, {
-      include: [
-        { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'avatar'], required: false }
-      ]
-    });
+    if (!assignedStaff) return res.status(400).json({ success: false, message: "Please select a staff member." });
 
-    if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    const appointment = await Appointment.findByPk(id);
+    if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
 
     appointment.assignedStaff = assignedStaff;
     await appointment.save();
 
-    const io = req.app.get('io');
-    if (io) io.emit('appointmentUpdated', appointment);
+    const updatedAppointment = await Appointment.findByPk(id, { include: appointmentIncludes() });
+    const io = req.app.get("io");
+    if (io) io.emit("appointmentUpdated", updatedAppointment || appointment);
 
-    return res.status(200).json({ success: true, message: 'Expert assigned successfully.', data: appointment });
+    return res.status(200).json({
+      success: true,
+      message: "Staff assigned successfully.",
+      data: updatedAppointment || appointment,
+    });
   } catch (error) {
-    console.error("Assign Staff Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
+    console.error("[BeautyVibe] Assign staff error:", error);
+    return res.status(500).json({ success: false, message: "Unable to assign staff." });
   }
 };
