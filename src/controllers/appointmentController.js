@@ -1,7 +1,6 @@
 const Appointment = require("../models/Appointment");
 const Service = require("../models/Service");
 const User = require("../models/User");
-
 const { Op, UniqueConstraintError } = require("sequelize");
 const { randomUUID } = require("crypto");
 
@@ -9,33 +8,21 @@ const { randomUUID } = require("crypto");
 // STRICT UTILITIES & HELPERS
 // ============================================
 
-// PERMANENT FIX: Scrub nested dummy values and stringified undefined/nulls
 const cleanValue = (value) => {
   if (value === null || value === undefined) return "";
-
-  if (typeof value !== "string" && typeof value !== "number") {
-    return "";
-  }
+  if (typeof value !== "string" && typeof value !== "number") return "";
 
   const result = String(value).trim();
   if (!result) return "";
 
   const lower = result.toLowerCase();
 
-  // 1. Destroy exact and combined undefined/null bugs
+  // ONLY Destroy exact and combined undefined/null strings
   if (/^(null|undefined|n\/a|na|undefined undefined|null null)$/.test(lower)) {
     return "";
   }
 
-  // 2. Destroy admin dummy session phone numbers unconditionally
-  if (
-    result.includes("98765") ||
-    lower.includes("dummy") ||
-    result === "+91 98765 43210" ||
-    result === "9876543210"
-  ) {
-    return "";
-  }
+  // NOTE: Removed aggressive scrubbing against test data like "dummy" or "9876543210"
 
   return result;
 };
@@ -51,11 +38,7 @@ const firstRealValue = (...values) => {
 const resolveAddress = (value) => {
   if (!value) return "";
   if (typeof value === "string") return cleanValue(value);
-
-  if (Array.isArray(value)) {
-    return value.map(resolveAddress).filter(Boolean).join(", ");
-  }
-
+  if (Array.isArray(value)) return value.map(resolveAddress).filter(Boolean).join(", ");
   if (typeof value !== "object") return "";
 
   const directAddress = firstRealValue(
@@ -64,26 +47,13 @@ const resolveAddress = (value) => {
     value.address,
     value.location
   );
-
   if (directAddress) return directAddress;
 
   return [
-    value.houseNo,
-    value.flatNumber,
-    value.building,
-    value.apartment,
-    value.street,
-    value.area,
-    value.landmark,
-    value.city,
-    value.district,
-    value.state,
-    value.postalCode,
-    value.pincode,
-  ]
-    .map(cleanValue)
-    .filter(Boolean)
-    .join(", ");
+    value.houseNo, value.flatNumber, value.building, value.apartment,
+    value.street, value.area, value.landmark, value.city,
+    value.district, value.state, value.postalCode, value.pincode,
+  ].map(cleanValue).filter(Boolean).join(", ");
 };
 
 const resolveUserAddress = (user) => {
@@ -91,22 +61,14 @@ const resolveUserAddress = (user) => {
   const addresses = user.addresses;
 
   if (Array.isArray(addresses)) {
-    const selected =
-      addresses.find(
-        (address) =>
-          address?.isDefault === true ||
-          address?.default === true ||
-          address?.isDefault === 1
-      ) || addresses[0];
+    const selected = addresses.find(
+      (a) => a?.isDefault === true || a?.default === true || a?.isDefault === 1
+    ) || addresses[0];
     return resolveAddress(selected);
   }
 
   if (addresses && typeof addresses === "object") {
-    return resolveAddress(
-      addresses.defaultAddress ||
-      addresses.selectedAddress ||
-      addresses
-    );
+    return resolveAddress(addresses.defaultAddress || addresses.selectedAddress || addresses);
   }
 
   return resolveAddress(user.address);
@@ -169,7 +131,6 @@ const appointmentIncludes = () => [
 // ============================================
 // GET USER APPOINTMENTS
 // ============================================
-
 exports.getUserAppointments = async (req, res) => {
   try {
     const userId = Number(req.user?.dbId || req.user?.id);
@@ -190,27 +151,11 @@ exports.getUserAppointments = async (req, res) => {
       const plain = appointment.get({ plain: true });
       const user = plain.user || {};
 
-      const profileName = [cleanValue(user.firstName), cleanValue(user.lastName)]
-        .filter(Boolean)
-        .join(" ");
+      const profileName = [cleanValue(user.firstName), cleanValue(user.lastName)].filter(Boolean).join(" ");
 
-      const customerName = firstRealValue(
-        plain.customerName,
-        profileName,
-        user.name
-      ) || "Valued Client";
-
-      const mobileNumber = firstRealValue(
-        plain.mobileNumber,
-        plain.phone,
-        user.phone
-      );
-
-      const address = firstRealValue(
-        resolveAddress(plain.address),
-        resolveAddress(plain.doorstepAddress),
-        resolveUserAddress(user)
-      );
+      const customerName = firstRealValue(plain.customerName, profileName, user.name) || "Valued Client";
+      const mobileNumber = firstRealValue(plain.mobileNumber, plain.phone, user.phone);
+      const address = firstRealValue(resolveAddress(plain.address), resolveAddress(plain.doorstepAddress), resolveUserAddress(user));
 
       return {
         ...plain,
@@ -255,20 +200,13 @@ exports.getUserAppointments = async (req, res) => {
 // ============================================
 // GET BOOKED SLOTS
 // ============================================
-
 exports.getBookedSlots = async (req, res) => {
   try {
     const { date } = req.query;
-
-    if (!date) {
-      return res.status(400).json({ success: false, message: "Appointment date is required." });
-    }
+    if (!date) return res.status(400).json({ success: false, message: "Appointment date is required." });
 
     const bookedAppointments = await Appointment.findAll({
-      where: {
-        date,
-        status: { [Op.notIn]: ["Cancelled", "Rejected"] },
-      },
+      where: { date, status: { [Op.notIn]: ["Cancelled", "Rejected"] } },
       attributes: ["time", "date"],
     });
 
@@ -283,7 +221,6 @@ exports.getBookedSlots = async (req, res) => {
 // ============================================
 // CREATE APPOINTMENT
 // ============================================
-
 exports.createAppointment = async (req, res) => {
   try {
     const body = req.body || {};
@@ -294,13 +231,12 @@ exports.createAppointment = async (req, res) => {
         where: { requestId: idempotencyKey },
         include: appointmentIncludes(),
       });
-
       if (existingAppointment) {
         return res.status(200).json({
           success: true,
           duplicateRequest: true,
           message: "Appointment already processed.",
-          data: existingAppointment, // Can be formatted here if needed
+          data: existingAppointment,
         });
       }
     }
@@ -313,26 +249,17 @@ exports.createAppointment = async (req, res) => {
       linkedUser = await User.findByPk(mysqlUserId);
     }
 
-    const finalCustomerName = firstRealValue(
-      customerDetails.customerName,
-      linkedUser?.name
-    ) || "Valued Client";
-
-    const finalMobile = firstRealValue(
-      customerDetails.mobileNumber,
-      linkedUser?.phone
-    );
-
+    const finalCustomerName = firstRealValue(customerDetails.customerName, linkedUser?.name) || "Valued Client";
+    const finalMobile = firstRealValue(customerDetails.mobileNumber, linkedUser?.phone);
     const finalAddress = firstRealValue(customerDetails.address);
+    
     const { date, time } = body;
-
     if (!date || !time) {
       return res.status(400).json({ success: false, message: "Please provide appointment date and time." });
     }
 
     const serviceId = Number(body.serviceId);
     let service = null;
-
     if (Number.isInteger(serviceId) && serviceId > 0) {
       service = await Service.findByPk(serviceId);
     }
@@ -367,9 +294,7 @@ exports.createAppointment = async (req, res) => {
 
     const responseAppointment = fullAppointment || appointment;
     const io = req.app.get("io");
-    if (io) {
-      io.emit("newAppointment", responseAppointment);
-    }
+    if (io) io.emit("newAppointment", responseAppointment);
 
     return res.status(201).json({
       success: true,
@@ -388,7 +313,6 @@ exports.createAppointment = async (req, res) => {
 // ============================================
 // UPDATE APPOINTMENT STATUS
 // ============================================
-
 exports.updateAppointmentStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -423,7 +347,6 @@ exports.updateAppointmentStatus = async (req, res) => {
 // ============================================
 // ASSIGN STAFF
 // ============================================
-
 exports.assignStaff = async (req, res) => {
   try {
     const { id } = req.params;
