@@ -123,8 +123,9 @@ async function startServer() {
   await sequelize.authenticate();
   console.log(`[BeautyVibe DB] MySQL connected (${process.env.NODE_ENV === 'production' ? 'Aiven Cloud' : 'Localhost'})`);
 
-  await sequelize.sync(); 
-  console.log("[BeautyVibe DB] Models synchronized successfully");
+  // Use alter: { drop: false } so new columns (customerName, mobileNumber, address) are safely added to MySQL without dropping tables or data
+  await sequelize.sync({ alter: { drop: false } });  
+  console.log("[BeautyVibe DB] Models and schema synchronized successfully");
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);

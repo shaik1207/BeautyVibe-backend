@@ -1,4 +1,3 @@
-
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 
@@ -16,18 +15,30 @@ const Appointment = sequelize.define(
 
     userId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
     },
 
     serviceId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: "services",
-        key: "id",
-      },
-      onUpdate: "CASCADE",
-      onDelete: "RESTRICT",
+      allowNull: true,
+    },
+
+    customerName: {
+      type: DataTypes.STRING(150),
+      allowNull: true,
+      defaultValue: "Valued Client",
+    },
+
+    mobileNumber: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: "",
+    },
+
+    address: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: "",
     },
 
     serviceName: {
@@ -115,31 +126,32 @@ const Appointment = sequelize.define(
 );
 
 // ============================================
-// ASSOCIATIONS
+// LOOSE ASSOCIATIONS
 // ============================================
 
 Appointment.belongsTo(User, {
   foreignKey: "userId",
   as: "user",
-  onDelete: "CASCADE",
-  onUpdate: "CASCADE",
+  constraints: false,
 });
 
 User.hasMany(Appointment, {
   foreignKey: "userId",
   as: "appointments",
+  constraints: false,
 });
 
 Appointment.belongsTo(Service, {
   foreignKey: "serviceId",
   as: "service",
-  onDelete: "RESTRICT",
-  onUpdate: "CASCADE",
+  constraints: false,
 });
 
 Service.hasMany(Appointment, {
+  foreignKey: "appointments",
   foreignKey: "serviceId",
   as: "appointments",
+  constraints: false,
 });
 
 module.exports = Appointment;
