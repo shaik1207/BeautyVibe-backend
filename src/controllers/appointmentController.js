@@ -8,7 +8,8 @@ const { randomUUID } = require("crypto");
 // STRICT UTILITIES & HELPERS
 // ============================================
 
-const cleanValue = (value) => {
+// Rejects empty values, null strings, AND email addresses from being treated as names
+const cleanString = (value) => {
   if (value === null || value === undefined) return "";
   if (typeof value !== "string" && typeof value !== "number") return "";
 
@@ -17,19 +18,22 @@ const cleanValue = (value) => {
 
   const lower = result.toLowerCase();
 
-  // ONLY Destroy exact and combined undefined/null strings
-  if (/^(null|undefined|n\/a|na|undefined undefined|null null)$/.test(lower)) {
+  // Destroy null/undefined string literals
+  if (/^(null|undefined|n\/a|na|undefined undefined|null null|valued client|walk-in client)$/.test(lower)) {
     return "";
   }
 
-  // NOTE: Removed aggressive scrubbing against test data like "dummy" or "9876543210"
+  // STRICTLY destroy email addresses from being treated as human names
+  if (result.includes("@") && result.includes(".")) {
+    return "";
+  }
 
   return result;
 };
 
 const firstRealValue = (...values) => {
   for (const value of values) {
-    const result = cleanValue(value);
+    const result = cleanString(value);
     if (result) return result;
   }
   return "";
@@ -37,12 +41,15 @@ const firstRealValue = (...values) => {
 
 const resolveAddress = (value) => {
   if (!value) return "";
-  if (typeof value === "string") return cleanValue(value);
+  if (typeof value === "string") return cleanString(value);
   if (Array.isArray(value)) return value.map(resolveAddress).filter(Boolean).join(", ");
   if (typeof value !== "object") return "";
 
   const directAddress = firstRealValue(
     value.fullAddress,
+    value.doorstepAddress,
+    value.serviceAddress,
+    value.customerAddress,
     value.formattedAddress,
     value.address,
     value.location
@@ -50,10 +57,22 @@ const resolveAddress = (value) => {
   if (directAddress) return directAddress;
 
   return [
-    value.houseNo, value.flatNumber, value.building, value.apartment,
-    value.street, value.area, value.landmark, value.city,
-    value.district, value.state, value.postalCode, value.pincode,
-  ].map(cleanValue).filter(Boolean).join(", ");
+    value.houseNo,
+    value.flatNumber,
+    value.building,
+    value.apartment,
+    value.street,
+    value.area,
+    value.landmark,
+    value.city,
+    value.district,
+    value.state,
+    value.postalCode,
+    value.pincode,
+  ]
+    .map(cleanString)
+    .filter(Boolean)
+    .join(", ");
 };
 
 const resolveUserAddress = (user) => {
@@ -61,9 +80,10 @@ const resolveUserAddress = (user) => {
   const addresses = user.addresses;
 
   if (Array.isArray(addresses)) {
-    const selected = addresses.find(
-      (a) => a?.isDefault === true || a?.default === true || a?.isDefault === 1
-    ) || addresses[0];
+    const selected =
+      addresses.find(
+        (a) => a?.isDefault === true || a?.default === true || a?.isDefault === 1
+      ) || addresses[0];
     return resolveAddress(selected);
   }
 
@@ -74,43 +94,72 @@ const resolveUserAddress = (user) => {
   return resolveAddress(user.address);
 };
 
-const getCustomerDetails = (body = {}) => {
+// Extracts first name, last name, clean customer name (no emails), mobile, and address
+const extractCustomerInfo = (body = {}, linkedUser = null) => {
   const customer = body.customerDetails || body.customer || body.user || body.client || {};
 
-  const firstName = firstRealValue(body.firstName, customer.firstName);
-  const lastName = firstRealValue(body.lastName, customer.lastName);
-  const combinedName = [firstName, lastName].filter(Boolean).join(" ");
+  // 1. Resolve First and Last Name strictly
+  const firstName = firstRealValue(
+    body.firstName,
+    customer.firstName,
+    body.first_name,
+    linkedUser?.firstName
+  );
 
-  const customerName = firstRealValue(
+  const lastName = firstRealValue(
+    body.lastName,
+    customer.lastName,
+    body.last_name,
+    linkedUser?.lastName
+  );
+
+  const combinedFirstLast = [firstName, lastName].filter(Boolean).join(" ");
+
+  // 2. Resolve Full Name without accepting any emails
+  const rawCandidateName = firstRealValue(
+    combinedFirstLast,
     body.customerName,
+    body.fullName,
     body.name,
     customer.customerName,
     customer.fullName,
     customer.name,
-    combinedName
-  ) || "Valued Client";
+    linkedUser?.name
+  );
 
+  // Fall back to "Valued Client" if the only stored string was an email address
+  const customerName = cleanString(rawCandidateName) || "Valued Client";
+
+  // 3. Resolve Mobile Phone with multi-field fallback
   const mobileNumber = firstRealValue(
     body.mobileNumber,
     body.phoneNumber,
     body.phone,
     body.mobile,
+    body.contact,
     customer.mobileNumber,
     customer.phoneNumber,
     customer.phone,
-    customer.mobile
+    customer.mobile,
+    customer.contact,
+    linkedUser?.phone,
+    linkedUser?.mobileNumber,
+    linkedUser?.mobile
   );
 
+  // 4. Resolve Address
   const address = firstRealValue(
-    body.address,
-    body.doorstepAddress,
-    body.fullAddress,
-    typeof body.location === "string" ? body.location : body.location?.fullAddress,
-    customer.address,
-    customer.fullAddress
+    resolveAddress(body.address),
+    resolveAddress(body.doorstepAddress),
+    resolveAddress(body.serviceAddress),
+    resolveAddress(body.customerAddress),
+    resolveAddress(body.fullAddress),
+    resolveAddress(body.location),
+    resolveAddress(customer.address),
+    resolveUserAddress(linkedUser)
   );
 
-  return { customerName, mobileNumber, address };
+  return { firstName, lastName, customerName, mobileNumber, address };
 };
 
 const appointmentIncludes = () => [
@@ -151,20 +200,23 @@ exports.getUserAppointments = async (req, res) => {
       const plain = appointment.get({ plain: true });
       const user = plain.user || {};
 
-      const profileName = [cleanValue(user.firstName), cleanValue(user.lastName)].filter(Boolean).join(" ");
-
-      const customerName = firstRealValue(plain.customerName, profileName, user.name) || "Valued Client";
-      const mobileNumber = firstRealValue(plain.mobileNumber, plain.phone, user.phone);
-      const address = firstRealValue(resolveAddress(plain.address), resolveAddress(plain.doorstepAddress), resolveUserAddress(user));
+      const info = extractCustomerInfo(plain, user);
 
       return {
         ...plain,
         _id: plain.id,
         id: plain.id,
-        customerName,
-        mobileNumber,
-        phone: mobileNumber,
-        address,
+        firstName: info.firstName,
+        lastName: info.lastName,
+        customerName: info.customerName,
+        name: info.customerName,
+        fullName: info.customerName,
+        mobileNumber: info.mobileNumber,
+        phone: info.mobileNumber,
+        phoneNumber: info.mobileNumber,
+        mobile: info.mobileNumber,
+        address: info.address,
+        doorstepAddress: info.address,
         serviceName: firstRealValue(plain.service?.name, plain.serviceName) || "Beauty Ritual",
         category: firstRealValue(plain.service?.category, plain.category) || "General",
         amount: Number(plain.amount || 0),
@@ -174,13 +226,13 @@ exports.getUserAppointments = async (req, res) => {
         assignedStaff: plain.assignedStaff || "",
         user: {
           id: user.id || plain.userId || null,
-          firstName: cleanValue(user.firstName),
-          lastName: cleanValue(user.lastName),
-          name: customerName,
-          email: cleanValue(user.email),
-          phone: mobileNumber,
-          mobile: mobileNumber,
-          avatar: cleanValue(user.avatar),
+          firstName: info.firstName,
+          lastName: info.lastName,
+          name: info.customerName,
+          email: cleanString(user.email),
+          phone: info.mobileNumber,
+          mobile: info.mobileNumber,
+          avatar: cleanString(user.avatar),
           addresses: user.addresses || [],
         },
       };
@@ -224,7 +276,7 @@ exports.getBookedSlots = async (req, res) => {
 exports.createAppointment = async (req, res) => {
   try {
     const body = req.body || {};
-    const idempotencyKey = cleanValue(req.headers["idempotency-key"] || body.requestId);
+    const idempotencyKey = cleanString(req.headers["idempotency-key"] || body.requestId);
 
     if (idempotencyKey) {
       const existingAppointment = await Appointment.findOne({
@@ -241,18 +293,14 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    const customerDetails = getCustomerDetails(body);
     const mysqlUserId = Number(req.user?.dbId || req.user?.id) || null;
     let linkedUser = null;
-
     if (mysqlUserId) {
       linkedUser = await User.findByPk(mysqlUserId);
     }
 
-    const finalCustomerName = firstRealValue(customerDetails.customerName, linkedUser?.name) || "Valued Client";
-    const finalMobile = firstRealValue(customerDetails.mobileNumber, linkedUser?.phone);
-    const finalAddress = firstRealValue(customerDetails.address);
-    
+    const info = extractCustomerInfo(body, linkedUser);
+
     const { date, time } = body;
     if (!date || !time) {
       return res.status(400).json({ success: false, message: "Please provide appointment date and time." });
@@ -264,24 +312,26 @@ exports.createAppointment = async (req, res) => {
       service = await Service.findByPk(serviceId);
     }
 
-    const finalServiceName = cleanValue(service?.name || body.serviceName) || "Beauty Ritual";
-    const finalCategory = cleanValue(service?.category || body.category) || "General";
+    const finalServiceName = cleanString(service?.name || body.serviceName) || "Beauty Ritual";
+    const finalCategory = cleanString(service?.category || body.category) || "General";
     const finalAmount = Number(service ? service.price : body.amount) || 999;
-    const finalType = cleanValue(body.type).toUpperCase() === "SALON" ? "SALON" : "HOME";
+    const finalType = cleanString(body.type).toUpperCase() === "SALON" ? "SALON" : "HOME";
 
     const appointmentData = {
       userId: mysqlUserId,
       serviceId: service?.id || null,
-      customerName: finalCustomerName,
-      mobileNumber: finalMobile,
-      phone: finalMobile,
-      address: finalAddress,
+      firstName: info.firstName,
+      lastName: info.lastName,
+      customerName: info.customerName,
+      mobileNumber: info.mobileNumber,
+      phone: info.mobileNumber,
+      address: info.address,
       serviceName: finalServiceName,
       category: finalCategory,
       amount: finalAmount,
       type: finalType,
-      date: cleanValue(date),
-      time: cleanValue(time),
+      date: cleanString(date),
+      time: cleanString(time),
       status: "Pending",
       requestId: idempotencyKey || randomUUID(),
       passCode: `PASS-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`,
@@ -350,7 +400,7 @@ exports.updateAppointmentStatus = async (req, res) => {
 exports.assignStaff = async (req, res) => {
   try {
     const { id } = req.params;
-    const assignedStaff = cleanValue(req.body?.assignedStaff);
+    const assignedStaff = cleanString(req.body?.assignedStaff);
 
     if (!assignedStaff) return res.status(400).json({ success: false, message: "Please select a staff member." });
 

@@ -58,6 +58,56 @@ exports.createStaff = async (req, res) => {
   }
 };
 
+// Update an existing staff member
+exports.updateStaff = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const staffMember = await Staff.findByPk(id);
+
+    if (!staffMember) {
+      return res.status(404).json({ success: false, message: 'Staff member not found.' });
+    }
+
+    const { 
+      firstName, 
+      lastName, 
+      email, 
+      phone, 
+      dob, 
+      gender, 
+      role, 
+      workExperience, 
+      proofOfSubmission, 
+      permanentAddress, 
+      avatar 
+    } = req.body;
+
+    await staffMember.update({
+      firstName: firstName !== undefined ? firstName : staffMember.firstName,
+      lastName: lastName !== undefined ? lastName : staffMember.lastName,
+      email: email !== undefined ? email : staffMember.email,
+      phone: phone !== undefined ? phone : staffMember.phone,
+      dob: dob !== undefined ? dob : staffMember.dob,
+      gender: gender !== undefined ? gender : staffMember.gender,
+      role: role !== undefined ? role : staffMember.role,
+      workExperience: workExperience !== undefined ? workExperience : staffMember.workExperience,
+      proofOfSubmission: proofOfSubmission !== undefined ? proofOfSubmission : staffMember.proofOfSubmission,
+      permanentAddress: permanentAddress !== undefined ? permanentAddress : staffMember.permanentAddress,
+      avatar: avatar !== undefined ? avatar : staffMember.avatar
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('staffUpdated', staffMember);
+    }
+
+    res.status(200).json({ success: true, data: staffMember });
+  } catch (error) {
+    console.error("Update Staff Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // Delete a staff member
 exports.deleteStaff = async (req, res) => {
   try {

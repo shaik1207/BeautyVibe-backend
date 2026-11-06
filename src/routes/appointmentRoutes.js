@@ -8,9 +8,10 @@ const {
 } = require('../controllers/appointmentController');
 const { protect } = require('../middleware/authMiddleware');
 
-router.get('/booked-slots', protect, getBookedSlots);
+// Public route to allow slot checking during guest / unauthenticated booking flows
+router.get('/booked-slots', getBookedSlots);
 
-
+// Protected routes
 router.get('/', protect, getUserAppointments);
 router.post('/', protect, createAppointment);
 router.patch('/:id/status', protect, updateAppointmentStatus);
