@@ -11,7 +11,7 @@ exports.getUserAppointments = async (req, res) => {
 
     queryOptions.include = [
       { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
-      { model: User, as: 'user', attributes: ['id', 'name', 'email', 'avatar'], required: false }
+      { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
     ];
     queryOptions.order = [['createdAt', 'DESC']];
 
@@ -20,6 +20,28 @@ exports.getUserAppointments = async (req, res) => {
     const formatted = appointments.map(app => {
       const plain = app.get({ plain: true });
       const dbUser = plain.user || {};
+
+      // Robust fallback for phone/mobile across appointment and user record
+      const resolvedMobile = 
+        plain.mobileNumber || 
+        dbUser.phone || 
+        dbUser.mobile || 
+        dbUser.phoneNumber || 
+        dbUser.mobileNumber || 
+        req.user?.phone || 
+        req.user?.mobile || 
+        '';
+
+      const resolvedName = 
+        plain.customerName || 
+        dbUser.name || 
+        req.user?.name || 
+        'Valued Client';
+
+      const resolvedAddress = 
+        plain.address || 
+        dbUser.address || 
+        '';
 
       return {
         _id: plain.id,
@@ -34,14 +56,13 @@ exports.getUserAppointments = async (req, res) => {
         time: plain.time,
         status: plain.status || 'Pending',
         assignedStaff: plain.assignedStaff || '',
-        // Real persisted details from database
-        customerName: plain.customerName || dbUser.name || req.user?.name || 'Valued Client',
-        mobileNumber: plain.mobileNumber || dbUser.phone || '',
-        address: plain.address || '',
+        customerName: resolvedName,
+        mobileNumber: resolvedMobile,
+        address: resolvedAddress,
         user: {
-          name: plain.customerName || dbUser.name || req.user?.name || 'Valued Client',
+          name: resolvedName,
           email: dbUser.email || req.user?.email || 'client@beautyvibe.in',
-          mobile: plain.mobileNumber || dbUser.phone || '',
+          mobile: resolvedMobile,
           avatar: dbUser.avatar || req.user?.avatar || ''
         },
         createdAt: plain.createdAt
@@ -92,9 +113,12 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    let { 
+    // Exhaustive field extraction from req.body and req.user to ensure mobile/phone is NEVER missed
+    const { 
       serviceId, serviceName, category, amount, type, date, time, requestId,
-      mobileNumber, phone, address, doorstepAddress, customerName, name 
+      mobileNumber, phone, phoneNumber, mobile, phone_number, number, contact, contactNumber, telephone,
+      address, doorstepAddress, shippingAddress, deliveryAddress,
+      customerName, name, firstName, lastName, fullName
     } = req.body;
 
     if (!date || !time) {
@@ -104,11 +128,48 @@ exports.createAppointment = async (req, res) => {
     const finalServiceName = serviceName || 'Beauty Ritual';
     const finalCategory = category || 'General';
     const finalAmount = Number(amount) || 999;
-    const finalMobile = mobileNumber || phone || '';
-    const finalAddress = address || doorstepAddress || '';
-    const finalCustomerName = customerName || name || req.user?.name || 'Valued Client';
+    
+    // Robust mobile number resolution across all possible frontend payload keys
+    const finalMobile = (
+      mobileNumber || 
+      phone || 
+      phoneNumber || 
+      mobile || 
+      phone_number || 
+      number || 
+      contact || 
+      contactNumber || 
+      telephone || 
+      req.user?.phone || 
+      req.user?.mobile || 
+      req.user?.phoneNumber || 
+      ''
+    ).trim();
 
-    // 2. Safely resolve User ID
+    // Robust address resolution
+    const finalAddress = (
+      address || 
+      doorstepAddress || 
+      shippingAddress || 
+      deliveryAddress || 
+      (typeof req.body.location === 'string' ? req.body.location : req.body.location?.fullAddress) || 
+      req.user?.address || 
+      ''
+    ).trim();
+
+    // Robust customer name resolution
+    const derivedName = [firstName, lastName].filter(Boolean).join(' ');
+    const finalCustomerName = (
+      customerName || 
+      name || 
+      fullName || 
+      derivedName || 
+      req.user?.name || 
+      req.user?.displayName || 
+      'Valued Client'
+    ).trim();
+
+    // 2. Safely resolve User ID and sync phone number
     let mysqlUserId = null;
     try {
       if (req.user && (req.user.email || req.user.id)) {
@@ -117,9 +178,21 @@ exports.createAppointment = async (req, res) => {
         
         const [userRecord] = await User.findOrCreate({
           where: { email },
-          defaults: { name: userName, role: req.user.role || 'client' }
+          defaults: { 
+            name: userName, 
+            role: req.user.role || 'client',
+            phone: finalMobile || req.user?.phone || ''
+          }
         });
-        if (userRecord) mysqlUserId = userRecord.id;
+
+        if (userRecord) {
+          mysqlUserId = userRecord.id;
+          // Update user phone if missing and available in request
+          if (finalMobile && !userRecord.phone) {
+            userRecord.phone = finalMobile;
+            await userRecord.save();
+          }
+        }
       }
     } catch (userErr) {
       console.warn("User resolution warning:", userErr.message);
@@ -129,9 +202,15 @@ exports.createAppointment = async (req, res) => {
       try {
         const [guestUser] = await User.findOrCreate({
           where: { email: 'guest@beautyvibe.in' },
-          defaults: { name: 'Valued Guest', role: 'client' }
+          defaults: { name: 'Valued Guest', role: 'client', phone: finalMobile }
         });
-        if (guestUser) mysqlUserId = guestUser.id;
+        if (guestUser) {
+          mysqlUserId = guestUser.id;
+          if (finalMobile && !guestUser.phone) {
+            guestUser.phone = finalMobile;
+            await guestUser.save();
+          }
+        }
       } catch (e) {
         mysqlUserId = null;
       }
@@ -189,15 +268,23 @@ exports.createAppointment = async (req, res) => {
       appointment = await Appointment.create(appointmentData);
     }
 
+    // Fetch complete appointment with associations to emit via Socket
+    const fullAppointment = await Appointment.findByPk(appointment.id, {
+      include: [
+        { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+      ]
+    });
+
     const io = req.app.get('io');
     if (io) {
-      io.emit('newAppointment', appointment);
+      io.emit('newAppointment', fullAppointment || appointment);
     }
 
     return res.status(201).json({
       success: true,
       message: 'Appointment booked successfully.',
-      data: appointment
+      data: fullAppointment || appointment
     });
   } catch (error) {
     console.error("Create Appointment Critical Error:", error);
@@ -230,7 +317,13 @@ exports.updateAppointmentStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    const appointment = await Appointment.findByPk(id);
+    const appointment = await Appointment.findByPk(id, {
+      include: [
+        { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+      ]
+    });
+
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
@@ -253,7 +346,13 @@ exports.assignStaff = async (req, res) => {
     const { id: appId } = req.params;
     const { assignedStaff } = req.body;
 
-    const appointment = await Appointment.findByPk(appId);
+    const appointment = await Appointment.findByPk(appId, {
+      include: [
+        { model: Service, as: 'service', attributes: ['name', 'category', 'duration', 'image'], required: false },
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'mobile', 'avatar'], required: false }
+      ]
+    });
+
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
